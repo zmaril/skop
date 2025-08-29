@@ -38,6 +38,11 @@ Rather than work harder or change my behavior in any significant or corrective w
 
 I think if I had something like this, I would be much happier and so I am burning a few lakes with Claude to see if it make it. 
 
+
+## Inspiration 
+
+I've been thinking about this sort of thing off and on for a decade now. I tried something like this with [bpfquery](https://github.com/zmaril/bpfquery) but it never felt quite right. Then I saw a video of [Peter Whidden talking about his very cool thing called Mote](https://www.youtube.com/watch?v=Hju0H3NHxVI) and thought maybe I should try something like that. 
+
 ## Current Features
 
 Some to none of the above, just an experiment so far. 
