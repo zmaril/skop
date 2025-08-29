@@ -1,4 +1,4 @@
-# Skop - System Knowledge Operations Platform
+# skop
 
 Skop makes investigating and debugging UNIX systems hurt less. 
 
