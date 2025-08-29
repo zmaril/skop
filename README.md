@@ -2,7 +2,7 @@
 
 Skop makes investigating and debugging UNIX systems hurt less. 
 
-![skop](./skop.png)
+<img src="./skop.png" alt="skop" width="150" />
 
 ## Usage
 ```
