@@ -1,0 +1,19 @@
+Goal:
+Make something good and usable 
+
+Now:
+
+--
+Store all the lines 
+Replay the lines 
+Make it make more and better noises 
+- port based, Network
+- filesystem 
+
+Make host be a primary part of it 
+
+Pivot tables 
+Graphs 
+
+Save widget layout to json? 
+
