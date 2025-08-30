@@ -7,6 +7,7 @@ Skop makes investigating and debugging UNIX systems hurt less.
 ## Usage
 ```
 git clone https://github.com/zmaril/skop.git
+brew install jc
 cd skop
 cargo run
 ```

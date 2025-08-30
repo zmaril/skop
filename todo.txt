@@ -17,3 +17,12 @@ Graphs
 
 Save widget layout to json? 
 
+
+Escape out of things 
+Copy and paste out of it 
+Pivot tables
+
+
+https://github.com/neferdata/allms llm's for some reason? 
+
+ssh bastion 

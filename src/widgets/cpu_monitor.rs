@@ -1,6 +1,5 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 use tokio::runtime::Runtime;
 use eframe::egui;
 use kira::{
@@ -129,9 +128,9 @@ impl CPUMonitorWidget {
         }
         
         let mut sounds = self.cpu_sounds.lock().unwrap();
-        for (_i, (usage, sound)) in cpu_usage.iter().zip(sounds.iter_mut()).enumerate() {
+        for (usage, sound) in cpu_usage.iter().zip(sounds.iter_mut()) {
             // Modulate volume based on CPU usage
-            let usage_factor = (usage.usage_percent / 100.0).max(0.01).min(1.0);
+            let usage_factor = (usage.usage_percent / 100.0).clamp(0.01, 1.0);
             // Convert usage factor to dB (0-100% usage -> -40dB to -10dB)
             let db_value = -40.0 + (usage_factor * 30.0);
             let volume = Value::Fixed(Decibels(db_value));
@@ -145,7 +144,6 @@ impl CPUMonitorWidget {
         let cpu_data = self.cpu_data.clone();
         let is_running = self.is_running.clone();
         let refresh_interval_ms = self.refresh_interval_ms;
-        let audio_manager = self.audio_manager.clone();
         let cpu_sounds = self.cpu_sounds.clone();
         let audio_enabled = self.audio_enabled;
         

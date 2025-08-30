@@ -1,8 +1,26 @@
 use eframe::egui;
 
 mod widgets;
+mod database;
+mod investigation;
+mod views;
 
 fn main() -> eframe::Result {
+    // Initialize database on startup
+    if let Err(e) = database::ensure_skop_dir() {
+        eprintln!("Failed to create skop directory: {}", e);
+        std::process::exit(1);
+    }
+    
+    // Initialize database in tokio runtime
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    rt.block_on(async {
+        if let Err(e) = database::main_db::MainDB::new().await {
+            eprintln!("Failed to initialize main database: {}", e);
+            std::process::exit(1);
+        }
+    });
+    
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0]),
@@ -16,21 +34,44 @@ fn main() -> eframe::Result {
     )
 }
 
-use widgets::{WidgetType, SSHCommandWidget, CPUMonitorWidget, SystemInfoWidget};
+use widgets::WidgetType;
+use investigation::Investigation;
+use database::main_db::MainDB;
 
-struct Skop {
-    // Widget system
-    widgets: Vec<WidgetType>,
-    next_widget_id: usize,
+#[derive(PartialEq)]
+pub enum AppMode {
+    Home,
+    InvestigationWorkspace,
+    Settings,
+    About,
+    Help,
+}
+
+pub struct Skop {
+    // App mode
+    pub mode: AppMode,
+    
+    // Investigation browser
+    pub investigations: Vec<Investigation>,
+    pub current_investigation: Option<Investigation>,
+    pub main_db: Option<MainDB>,
+    pub show_delete_confirmation: bool,
+    pub investigation_to_delete: Option<usize>,
+    pub home_quote_index: usize,
+    
+    // Widget system (for workspace mode)
+    pub widgets: Vec<WidgetType>,
+    pub next_widget_id: usize,
     
     // Configuration dialogs
-    show_ssh_config: bool,
-    config_hostname: String,
-    config_command: String,
+    pub show_ssh_config: bool,
+    pub config_hostname: String,
+    pub config_command: String,
 }
 
 impl Skop {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        
         // Disable egui debug mode to hide widget ID warnings
         cc.egui_ctx.set_debug_on_hover(false);
         
@@ -41,6 +82,15 @@ impl Skop {
         cc.egui_ctx.set_style(style);
         
         Self {
+            mode: AppMode::Home,
+            
+            investigations: vec![],
+            current_investigation: None,
+            main_db: None,
+            show_delete_confirmation: false,
+            investigation_to_delete: None,
+            home_quote_index: 0,
+            
             widgets: vec![],
             next_widget_id: 0,
             
@@ -50,29 +100,9 @@ impl Skop {
         }
     }
     
-    fn create_ssh_widget(&mut self, hostname: String, command: String) {
-        let widget = SSHCommandWidget::new(self.next_widget_id, hostname, command);
-        self.widgets.push(WidgetType::SSHCommand(widget));
-        // Auto-execute the newly created SSH widget
-        if let Some(WidgetType::SSHCommand(ssh_widget)) = self.widgets.last() {
-            ssh_widget.execute();
-        }
-        self.next_widget_id += 1;
-    }
-    
-    fn create_cpu_monitor(&mut self) {
-        let widget = CPUMonitorWidget::new(self.next_widget_id);
-        self.widgets.push(WidgetType::CPUMonitor(widget));
-        // Auto-start the CPU monitor
-        if let Some(WidgetType::CPUMonitor(cpu_widget)) = self.widgets.last() {
-            cpu_widget.execute();
-        }
-        self.next_widget_id += 1;
-    }
-    
-    fn create_system_info(&mut self, info_type: String) {
-        let widget = SystemInfoWidget::new(self.next_widget_id, info_type);
-        self.widgets.push(WidgetType::SystemInfo(widget));
+    pub fn add_widget(&mut self, widget: WidgetType) {
+        widget.execute(); // Auto-execute before adding
+        self.widgets.push(widget);
         self.next_widget_id += 1;
     }
 }
@@ -83,184 +113,33 @@ impl eframe::App for Skop {
         // Request repaint for live updates
         ctx.request_repaint();
         
-        // Top menu bar
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("View", |ui| {
-                    if ui.button("Clear All Widgets").clicked() {
-                        self.widgets.clear();
-                    }
-                });
-                
-                ui.menu_button("Help", |ui| {
-                    ui.label("Skop - Widget-based Command Runner");
-                    ui.separator();
-                    ui.label("Use the sidebar to create widgets");
-                });
-            });
-        });
-        
-        // Left Sidebar - Widget Producer Menu
-        egui::SidePanel::left("widget_menu")
-            .resizable(false)
-            .default_width(200.0)
-            .show(ctx, |ui| {
-                ui.heading("Widget Menu");
-                ui.separator();
-                
-                ui.label("System Monitoring:");
-                ui.vertical(|ui| {
-                    if ui.button("CPU Monitor").clicked() {
-                        self.create_cpu_monitor();
-                    }
-                    if ui.button("System Info").clicked() {
-                        self.create_system_info("hardware".to_string());
-                    }
-                    if ui.button("Activity Monitor").clicked() {
-                        self.create_system_info("activity".to_string());
-                    }
-                });
-                
-                ui.separator();
-                
-                ui.label("SSH Commands:");
-                ui.vertical(|ui| {
-                    if ui.button("Custom SSH").clicked() {
-                        self.show_ssh_config = true;
-                    }
-                    if ui.button("File List").clicked() {
-                        self.create_ssh_widget("localhost".to_string(), "ls -la".to_string());
-                    }
-                    if ui.button("Working Dir").clicked() {
-                        self.create_ssh_widget("localhost".to_string(), "pwd".to_string());
-                    }
-                    if ui.button("Who Am I").clicked() {
-                        self.create_ssh_widget("localhost".to_string(), "whoami".to_string());
-                    }
-                    if ui.button("Disk Usage").clicked() {
-                        self.create_ssh_widget("localhost".to_string(), "df -h".to_string());
-                    }
-                    if ui.button("Ping Test").clicked() {
-                        self.create_ssh_widget("localhost".to_string(), "ping -c 3 google.com".to_string());
-                    }
-                });
-                
-                ui.separator();
-                
-                ui.label(format!("Active Widgets: {}", self.widgets.len()));
-            });
-        
-        // SSH Configuration Dialog
-        let mut create_ssh_widget = false;
-        let mut cancel_ssh_config = false;
-        
-        if self.show_ssh_config {
-            egui::Window::new("SSH Configuration")
-                .open(&mut self.show_ssh_config)
-                .default_size([400.0, 200.0])
-                .show(ctx, |ui| {
-                    ui.label("Configure SSH Command:");
-                    ui.separator();
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Host:");
-                        ui.text_edit_singleline(&mut self.config_hostname);
-                    });
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Command:");
-                        ui.text_edit_singleline(&mut self.config_command);
-                    });
-                    
-                    ui.separator();
-                    
-                    ui.horizontal(|ui| {
-                        if ui.button("Execute Command").clicked() && !self.config_hostname.is_empty() && !self.config_command.is_empty() {
-                            create_ssh_widget = true;
+        // Load database and investigations if not loaded
+        if self.main_db.is_none() {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            match rt.block_on(MainDB::new()) {
+                Ok(db) => {
+                    match rt.block_on(Investigation::load_all(&db)) {
+                        Ok(investigations) => {
+                            self.investigations = investigations;
+                            println!("Loaded {} investigations", self.investigations.len());
                         }
-                        
-                        if ui.button("Cancel").clicked() {
-                            cancel_ssh_config = true;
-                        }
-                    });
-                });
-        }
-        
-        // Handle SSH config actions
-        if create_ssh_widget {
-            self.create_ssh_widget(self.config_hostname.clone(), self.config_command.clone());
-            self.show_ssh_config = false;
-            self.config_hostname = "localhost".to_string();
-            self.config_command.clear();
-        }
-        
-        if cancel_ssh_config {
-            self.show_ssh_config = false;
-        }
-        
-        // Render all widgets
-        let mut widgets_to_remove = vec![];
-        let mut cpu_refresh_requests = vec![];
-        let mut info_refresh_requests = vec![];
-        
-        for (idx, widget) in self.widgets.iter_mut().enumerate() {
-            let should_remove = match widget {
-                WidgetType::SSHCommand(ssh_widget) => {
-                    !ssh_widget.render(ctx, idx)
-                },
-                WidgetType::CPUMonitor(cpu_widget) => {
-                    let (open, refresh_clicked) = cpu_widget.render(ctx, idx);
-                    if refresh_clicked {
-                        cpu_refresh_requests.push(cpu_widget.clone());
+                        Err(e) => println!("Failed to load investigations: {}", e),
                     }
-                    !open
-                },
-                WidgetType::SystemInfo(info_widget) => {
-                    let (open, refresh_clicked) = info_widget.render(ctx, idx);
-                    if refresh_clicked {
-                        info_refresh_requests.push(info_widget.clone());
-                    }
-                    !open
-                },
-            };
-            
-            if should_remove {
-                widgets_to_remove.push(idx);
+                    self.main_db = Some(db);
+                    println!("Database initialized successfully");
+                }
+                Err(e) => {
+                    println!("Failed to initialize database: {}", e);
+                }
             }
         }
         
-        // Handle refresh requests
-        for cpu_widget in cpu_refresh_requests {
-            cpu_widget.execute();
+        match self.mode {
+            AppMode::Home => self.render_home(ctx),
+            AppMode::InvestigationWorkspace => self.render_investigation_workspace(ctx),
+            AppMode::Settings => self.render_settings(ctx),
+            AppMode::About => self.render_about(ctx),
+            AppMode::Help => self.render_help(ctx),
         }
-        
-        for info_widget in info_refresh_requests {
-            info_widget.execute();
-        }
-        
-        // Remove closed widgets
-        for idx in widgets_to_remove.iter().rev() {
-            self.widgets.remove(*idx);
-        }
-        
-        // Central panel (background)
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Skop - Widget Command Runner");
-            ui.label("Execute commands and monitor system resources with widgets.");
-            
-            ui.add_space(20.0);
-            
-            if self.widgets.is_empty() {
-                ui.label("No active widgets. Use the widget menu on the left to create widgets.");
-                ui.add_space(10.0);
-                ui.label("Available widget types:");
-                ui.label("• SSH Commands - Run commands locally or remotely");
-                ui.label("• CPU Monitor - View CPU usage and system load");
-                ui.label("• System Info - Display hardware information");
-                ui.label("• Activity Monitor - Show top processes");
-            } else {
-                ui.label(format!("Active widgets: {}", self.widgets.len()));
-            }
-        });
     }
 }

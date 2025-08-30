@@ -40,7 +40,7 @@ impl SystemInfoWidget {
                 };
                 match crate::widgets::ssh_command::run_local_command(command, output.clone()).await {
                     Ok(_) => {
-                        output.lock().unwrap().push(format!("System info completed"));
+                        output.lock().unwrap().push("System info completed".to_string());
                     }
                     Err(e) => {
                         output.lock().unwrap().push(format!("Error: {}", e));
