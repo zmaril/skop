@@ -92,10 +92,8 @@ impl Skop {
         }
     }
     
-    pub fn add_widget(&mut self, widget: WidgetType) {
-        widget.start(); // Auto-start before adding
-        
-        // Auto-save widget to investigation database
+    pub fn add_widget(&mut self, mut widget: WidgetType) {
+        // First, save widget to database to satisfy foreign key constraint
         if let Some(ref current_investigation) = self.current_investigation {
             let rt = tokio::runtime::Runtime::new().unwrap();
             if let Err(e) = rt.block_on(async {
@@ -106,6 +104,21 @@ impl Skop {
             }
         }
         
+        // Set database connection for data capture
+        if let Some(ref current_investigation) = self.current_investigation {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            match rt.block_on(current_investigation.open()) {
+                Ok(db) => {
+                    widget.set_database(Some(std::sync::Arc::new(db)));
+                }
+                Err(e) => {
+                    eprintln!("Failed to open investigation database: {}", e);
+                }
+            }
+        }
+        
+        widget.start(); // Auto-start after widget is saved and database is set
+        
         self.widgets.push(widget);
         self.next_widget_id += 1;
     }
@@ -113,15 +126,37 @@ impl Skop {
     pub async fn load_widgets_from_db(&mut self, investigation: &Investigation) -> Result<(), Box<dyn std::error::Error>> {
         let db = investigation.open().await?;
         let loaded_widgets = db.load_widget_instances().await?;
+        let db_arc = std::sync::Arc::new(db);
         
-        for widget in loaded_widgets {
+        for mut widget in loaded_widgets {
             let widget_id = widget.widget_id();
+            
+            // Set database connection for data capture
+            widget.set_database(Some(db_arc.clone()));
+            
+            // Restore historical output for command widgets
+            if let Err(e) = self.restore_widget_output(&mut widget, &db_arc).await {
+                eprintln!("Failed to restore output for widget {}: {}", widget_id, e);
+            }
             
             self.widgets.push(widget);
             if widget_id >= self.next_widget_id {
                 self.next_widget_id = widget_id + 1;
             }
         }
+        
+        Ok(())
+    }
+    
+    async fn restore_widget_output(&self, widget: &mut WidgetType, db: &std::sync::Arc<database::investigation_db::InvestigationDB>) -> Result<(), Box<dyn std::error::Error>> {
+        let widget_id = widget.widget_id() as i32;
+        let widget_version = widget.widget_version();
+        
+        // Get historical data from database
+        let historical_lines = db.get_widget_data(widget_id, widget_version).await?;
+        
+        // Restore widget data using trait method
+        widget.restore_widget_data(historical_lines);
         
         Ok(())
     }

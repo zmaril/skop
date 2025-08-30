@@ -1,11 +1,12 @@
-pub mod ssh_command;
+pub mod command_widget;
+pub mod raw_command;
 pub mod cpu_monitor;
 pub mod system_info;
 pub mod process_monitor;
 pub mod network_monitor;
 pub mod about;
 
-pub use ssh_command::SSHCommandWidget;
+pub use raw_command::RawCommandWidget;
 pub use cpu_monitor::CPUMonitorWidget;
 pub use system_info::SystemInfoWidget;
 pub use process_monitor::ProcessMonitorWidget;
@@ -20,16 +21,24 @@ use eframe::egui;
 pub trait Widget {
     fn widget_type_name(&self) -> &'static str;
     fn widget_id(&self) -> usize;
-    fn start(&self) {} // Default no-op implementation  
-    fn stop(&self) {} // Default no-op implementation
+    fn widget_version(&self) -> i32;
+    fn increment_version(&mut self);
+    fn set_database(&mut self, database: Option<std::sync::Arc<crate::database::investigation_db::InvestigationDB>>);
+    fn start(&self) {} 
+    fn stop(&self) {} 
     fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool);
     fn refresh(&self) { self.stop(); self.start(); }
+    fn config_changed(&self) -> bool { false }
+    fn needs_restart(&self) -> bool { false }
+    
+    // Restore historical data to widget - default no-op for widgets without data
+    fn restore_widget_data(&mut self, _data: Vec<String>) {}
 }
 
 // Self-contained widget creation functions - each widget handles its own configuration
 impl WidgetType {
-    pub fn new_ssh_command(id: usize) -> Self {
-        WidgetType::SSHCommand(SSHCommandWidget::new_with_config(id))
+    pub fn new_raw_command(id: usize) -> Self {
+        WidgetType::RawCommand(RawCommandWidget::new_with_config(id))
     }
     
     pub fn new_cpu_monitor(id: usize) -> Self {
@@ -57,7 +66,7 @@ impl WidgetType {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WidgetType {
-    SSHCommand(SSHCommandWidget),
+    RawCommand(RawCommandWidget),
     CPUMonitor(CPUMonitorWidget),
     SystemInfo(SystemInfoWidget),
     ProcessMonitor(ProcessMonitorWidget),

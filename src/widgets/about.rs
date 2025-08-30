@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AboutWidget {
     pub id: usize,
+    pub version: i32,
 }
 
 impl crate::widgets::Widget for AboutWidget {
@@ -15,6 +16,22 @@ impl crate::widgets::Widget for AboutWidget {
         self.id
     }
     
+    fn widget_version(&self) -> i32 {
+        self.version
+    }
+    
+    fn increment_version(&mut self) {
+        self.version += 1;
+    }
+    
+    fn set_database(&mut self, _database: Option<std::sync::Arc<crate::database::investigation_db::InvestigationDB>>) {
+        // About widget doesn't capture data
+    }
+    
+    fn needs_restart(&self) -> bool {
+        // About widget doesn't execute commands, never needs restart
+        false
+    }
     
     fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
         let mut open = true;
@@ -75,7 +92,10 @@ impl crate::widgets::Widget for AboutWidget {
 
 impl AboutWidget {
     pub fn new(id: usize) -> Self {
-        Self { id }
+        Self { 
+            id,
+            version: 0,
+        }
     }
     
 }

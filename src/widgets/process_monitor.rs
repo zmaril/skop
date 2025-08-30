@@ -1,48 +1,30 @@
-use std::sync::{Arc, Mutex};
-use std::thread;
-use tokio::runtime::Runtime;
+use std::time::Duration;
 use eframe::egui;
 use serde::{Serialize, Deserialize};
-use serde_json::Value;
+use crate::widgets::command_widget::{CommandExecutor, CommandSpec, CommandWidget, ExecutionMode, CommandOutputRenderer, CommandControlBar};
 
-#[derive(Clone, Debug)]
-pub struct Process {
-    pub user: String,
-    pub pid: i64,
-    pub cpu_percent: f64,
-    pub mem_percent: f64,
-    pub command: String,
-    pub state: String,
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub enum ProcessSortBy {
+    CPU,
+    Memory,
+    PID,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProcessMonitorWidget {
     pub id: usize,
-    pub refresh_interval_ms: u64,
-    pub auto_scroll: bool,
+    pub version: i32,
+    pub refresh_interval_secs: u64,
     pub max_processes: usize,
     pub sort_by: ProcessSortBy,
-    pub filter_text: String,
-    #[serde(skip, default = "default_processes")]
-    pub processes: Arc<Mutex<Vec<Process>>>,
-    #[serde(skip, default = "default_running")]
-    pub is_running: Arc<Mutex<bool>>,
+    #[serde(skip, default = "default_executor")]
+    pub executor: CommandExecutor,
+    #[serde(skip, default)]
+    pub config_unsaved: bool,
 }
 
-fn default_processes() -> Arc<Mutex<Vec<Process>>> {
-    Arc::new(Mutex::new(Vec::new()))
-}
-
-fn default_running() -> Arc<Mutex<bool>> {
-    Arc::new(Mutex::new(false))
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ProcessSortBy {
-    CPU,
-    Memory,
-    PID,
-    Name,
+fn default_executor() -> CommandExecutor {
+    CommandExecutor::new()
 }
 
 impl crate::widgets::Widget for ProcessMonitorWidget {
@@ -54,221 +36,296 @@ impl crate::widgets::Widget for ProcessMonitorWidget {
         self.id
     }
     
+    fn widget_version(&self) -> i32 {
+        self.version
+    }
+    
+    fn increment_version(&mut self) {
+        self.version += 1;
+        self.config_unsaved = false;
+    }
+    
+    fn set_database(&mut self, database: Option<std::sync::Arc<crate::database::investigation_db::InvestigationDB>>) {
+        let widget_id = self.id as i32;
+        let widget_version = self.version;
+        self.executor.set_database(database, widget_id, widget_version);
+    }
+    
+    fn config_changed(&self) -> bool {
+        self.config_unsaved
+    }
+    
+    
+    fn needs_restart(&self) -> bool {
+        // Process monitor needs restart for execution-affecting changes (sort, max processes, interval)
+        self.config_unsaved
+    }
     
     fn start(&self) {
-        let processes = self.processes.clone();
-        let is_running = self.is_running.clone();
-        let refresh_interval_ms = self.refresh_interval_ms;
-        
-        *is_running.lock().unwrap() = true;
-        
-        thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async {
-                while *is_running.lock().unwrap() {
-                    match get_processes().await {
-                        Ok(proc_list) => {
-                            *processes.lock().unwrap() = proc_list;
-                        }
-                        Err(e) => {
-                            eprintln!("Error getting processes: {}", e);
-                        }
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(refresh_interval_ms)).await;
-                }
-            });
-        });
+        self.start_command();
     }
     
     fn stop(&self) {
-        *self.is_running.lock().unwrap() = false;
+        self.stop_command();
     }
     
     fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
-        let is_running = *self.is_running.lock().unwrap();
         let mut open = true;
         let mut refresh_clicked = false;
         
         egui::Window::new("Process Monitor")
-            .id(egui::Id::new(format!("process_widget_{}", self.id)))
+            .id(egui::Id::new(format!("process_monitor_{}", self.id)))
             .open(&mut open)
-            .default_pos([250.0 + (idx as f32 * 50.0), 100.0 + (idx as f32 * 50.0)])
-            .default_size([800.0, 500.0])
+            .default_pos([150.0 + (idx as f32 * 50.0), 150.0 + (idx as f32 * 50.0)])
+            .default_size([900.0, 600.0])
             .resizable(true)
             .show(ctx, |ui| {
-                // Control bar
                 ui.horizontal(|ui| {
-                    if is_running {
-                        ui.spinner();
-                        ui.label("Monitoring...");
-                        if ui.button("Stop").clicked() {
-                            self.stop();
-                        }
-                    } else {
-                        ui.label("Stopped");
-                        if ui.button("Start").clicked() {
-                            refresh_clicked = true;
-                        }
-                    }
+                    refresh_clicked = self.render_controls(ui);
                     
                     ui.separator();
-                    
-                    // Sort options
                     ui.label("Sort by:");
-                    if ui.selectable_label(self.sort_by == ProcessSortBy::CPU, "CPU").clicked() {
-                        self.sort_by = ProcessSortBy::CPU;
-                    }
-                    if ui.selectable_label(self.sort_by == ProcessSortBy::Memory, "Memory").clicked() {
-                        self.sort_by = ProcessSortBy::Memory;
-                    }
-                    if ui.selectable_label(self.sort_by == ProcessSortBy::PID, "PID").clicked() {
-                        self.sort_by = ProcessSortBy::PID;
-                    }
-                    if ui.selectable_label(self.sort_by == ProcessSortBy::Name, "Name").clicked() {
-                        self.sort_by = ProcessSortBy::Name;
+                    let old_sort = self.sort_by.clone();
+                    ui.selectable_value(&mut self.sort_by, ProcessSortBy::CPU, "CPU");
+                    ui.selectable_value(&mut self.sort_by, ProcessSortBy::Memory, "Memory");
+                    ui.selectable_value(&mut self.sort_by, ProcessSortBy::PID, "PID");
+                    if old_sort != self.sort_by {
+                        self.config_unsaved = true;
+                        // Restart with new sort if running
+                        if self.executor.is_running() {
+                            self.stop();
+                            self.start();
+                        }
                     }
                     
                     ui.separator();
+                    ui.label("Max:");
+                    let old_max = self.max_processes;
+                    ui.add(egui::DragValue::new(&mut self.max_processes).range(5..=100));
+                    if old_max != self.max_processes {
+                        self.config_unsaved = true;
+                        if self.executor.is_running() {
+                            self.stop();
+                            self.start();
+                        }
+                    }
                     
-                    // Filter
-                    ui.label("Filter:");
-                    ui.text_edit_singleline(&mut self.filter_text);
+                    ui.separator();
+                    ui.label("Interval:");
+                    let old_interval = self.refresh_interval_secs;
+                    ui.add(egui::DragValue::new(&mut self.refresh_interval_secs).range(1..=60).suffix("s"));
+                    if old_interval != self.refresh_interval_secs {
+                        self.config_unsaved = true;
+                        if self.executor.is_running() {
+                            self.stop();
+                            self.start();
+                        }
+                    }
                 });
                 
                 ui.separator();
-                
-                // Process table
-                let mut processes = self.processes.lock().unwrap().clone();
-                
-                // Apply filter
-                if !self.filter_text.is_empty() {
-                    processes.retain(|p| 
-                        p.command.to_lowercase().contains(&self.filter_text.to_lowercase()) ||
-                        p.user.to_lowercase().contains(&self.filter_text.to_lowercase())
-                    );
-                }
-                
-                // Sort processes
-                match self.sort_by {
-                    ProcessSortBy::CPU => processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap()),
-                    ProcessSortBy::Memory => processes.sort_by(|a, b| b.mem_percent.partial_cmp(&a.mem_percent).unwrap()),
-                    ProcessSortBy::PID => processes.sort_by(|a, b| a.pid.cmp(&b.pid)),
-                    ProcessSortBy::Name => processes.sort_by(|a, b| a.command.cmp(&b.command)),
-                }
-                
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        use egui_extras::{TableBuilder, Column};
-                        
-                        TableBuilder::new(ui)
-                            .striped(true)
-                            .resizable(true)
-                            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                            .column(Column::initial(60.0).resizable(true))  // PID
-                            .column(Column::initial(80.0).resizable(true))  // User
-                            .column(Column::initial(60.0).resizable(true))  // CPU %
-                            .column(Column::initial(60.0).resizable(true))  // Mem %
-                            .column(Column::initial(50.0).resizable(true))  // State
-                            .column(Column::remainder())                    // Command
-                            .header(20.0, |mut header| {
-                                header.col(|ui| { ui.strong("PID"); });
-                                header.col(|ui| { ui.strong("User"); });
-                                header.col(|ui| { ui.strong("CPU %"); });
-                                header.col(|ui| { ui.strong("Mem %"); });
-                                header.col(|ui| { ui.strong("State"); });
-                                header.col(|ui| { ui.strong("Command"); });
-                            })
-                            .body(|mut body| {
-                                for process in processes.iter().take(100) { // Limit to 100 for performance
-                                    body.row(18.0, |mut row| {
-                                        row.col(|ui| {
-                                            ui.label(process.pid.to_string());
-                                        });
-                                        row.col(|ui| {
-                                            ui.label(&process.user);
-                                        });
-                                        row.col(|ui| {
-                                            let color = if process.cpu_percent > 50.0 {
-                                                egui::Color32::RED
-                                            } else if process.cpu_percent > 20.0 {
-                                                egui::Color32::YELLOW
-                                            } else {
-                                                egui::Color32::GREEN
-                                            };
-                                            ui.colored_label(color, format!("{:.1}", process.cpu_percent));
-                                        });
-                                        row.col(|ui| {
-                                            let color = if process.mem_percent > 10.0 {
-                                                egui::Color32::RED
-                                            } else if process.mem_percent > 5.0 {
-                                                egui::Color32::YELLOW
-                                            } else {
-                                                egui::Color32::GREEN
-                                            };
-                                            ui.colored_label(color, format!("{:.1}", process.mem_percent));
-                                        });
-                                        row.col(|ui| {
-                                            ui.label(&process.state);
-                                        });
-                                        row.col(|ui| {
-                                            ui.label(&process.command);
-                                        });
-                                    });
-                                }
-                            });
-                    });
+                self.render_output(ui);
             });
         
         (open, refresh_clicked)
     }
+    
+    fn refresh(&self) {
+        self.stop();
+        self.start();
+    }
+    
+    fn restore_widget_data(&mut self, data: Vec<String>) {
+        self.executor.load_historical_output(data);
+    }
 }
+
+impl CommandWidget for ProcessMonitorWidget {
+    fn build_command(&self) -> CommandSpec {
+        // Use ps aux which jc supports
+        CommandSpec::new("ps")
+            .arg("aux")
+    }
+    
+    fn executor(&self) -> &CommandExecutor {
+        &self.executor
+    }
+    
+    fn executor_mut(&mut self) -> &mut CommandExecutor {
+        &mut self.executor
+    }
+    
+    fn execution_mode(&self) -> ExecutionMode {
+        ExecutionMode::Periodic(Duration::from_secs(self.refresh_interval_secs))
+    }
+}
+
+impl CommandOutputRenderer for ProcessMonitorWidget {
+    fn executor(&self) -> &CommandExecutor {
+        &self.executor
+    }
+    
+    fn render_output(&self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        use serde_json::Value;
+        
+        let raw_output = CommandWidget::executor(self).output.lock().unwrap();
+        
+        if raw_output.is_empty() {
+            ui.label("No data available");
+            return;
+        }
+        
+        let raw_text = raw_output.join("\n");
+        
+        // Process through jc --ps to get JSON
+        match std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("echo '{}' | jc --ps -q 2>/dev/null", raw_text.replace("'", "'\\''")))
+            .output()
+        {
+            Ok(output) if !output.stdout.is_empty() => {
+                // Parse JSON and render as egui table
+                match serde_json::from_slice::<Value>(&output.stdout) {
+                    Ok(json) => {
+                        if let Some(processes) = json.as_array() {
+                            // Render as egui table
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .stick_to_bottom(true)
+                                .show(ui, |ui| {
+                                    egui::Grid::new("process_table")
+                                        .num_columns(4)
+                                        .spacing([20.0, 4.0])
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            // Header
+                                            ui.strong("PID");
+                                            ui.strong("COMMAND"); 
+                                            ui.strong("CPU%");
+                                            ui.strong("MEMORY");
+                                            ui.end_row();
+                                            
+                                            // Process rows - sort by the selected field
+                                            let mut process_list: Vec<&Value> = processes.iter().collect();
+                                            match self.sort_by {
+                                                ProcessSortBy::CPU => {
+                                                    process_list.sort_by(|a, b| {
+                                                        let a_cpu = a.get("cpu_percent").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                                        let b_cpu = b.get("cpu_percent").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                                        b_cpu.partial_cmp(&a_cpu).unwrap_or(std::cmp::Ordering::Equal)
+                                                    });
+                                                }
+                                                ProcessSortBy::Memory => {
+                                                    process_list.sort_by(|a, b| {
+                                                        let a_mem = a.get("mem_percent").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                                        let b_mem = b.get("mem_percent").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                                        b_mem.partial_cmp(&a_mem).unwrap_or(std::cmp::Ordering::Equal)
+                                                    });
+                                                }
+                                                ProcessSortBy::PID => {
+                                                    process_list.sort_by(|a, b| {
+                                                        let a_pid = a.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
+                                                        let b_pid = b.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
+                                                        a_pid.cmp(&b_pid)
+                                                    });
+                                                }
+                                            }
+                                            
+                                            for process in process_list.iter().take(self.max_processes) {
+                                                let pid = process.get("pid")
+                                                    .and_then(|v| v.as_i64())
+                                                    .map(|v| v.to_string())
+                                                    .unwrap_or_else(|| "N/A".to_string());
+                                                
+                                                let command = process.get("command")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("N/A")
+                                                    .split_whitespace()
+                                                    .next()
+                                                    .unwrap_or("N/A");
+                                                
+                                                let cpu = process.get("cpu_percent")
+                                                    .and_then(|v| v.as_f64())
+                                                    .map(|v| format!("{:.1}%", v))
+                                                    .unwrap_or_else(|| "N/A".to_string());
+                                                
+                                                let memory = process.get("mem_percent")
+                                                    .and_then(|v| v.as_f64())
+                                                    .map(|v| format!("{:.1}%", v))
+                                                    .unwrap_or_else(|| "N/A".to_string());
+                                                
+                                                ui.monospace(&pid);
+                                                ui.monospace(command);
+                                                ui.monospace(&cpu);
+                                                ui.monospace(memory);
+                                                ui.end_row();
+                                            }
+                                        });
+                                });
+                        } else {
+                            // JSON doesn't have expected structure - fail
+                            ui.label("❌ jc failed to parse ps output - invalid JSON structure");
+                            ui.separator();
+                            ui.label("Raw ps output for debugging:");
+                            ui.separator();
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    for line in raw_text.lines() {
+                                        ui.label(egui::RichText::new(line).monospace().size(10.0));
+                                    }
+                                });
+                        }
+                    }
+                    Err(e) => {
+                        // JSON parsing failed - fail
+                        ui.label(format!("❌ JSON parsing failed: {}", e));
+                        ui.separator();
+                        ui.label("Raw jc output for debugging:");
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .max_height(200.0)
+                            .show(ui, |ui| {
+                                let jc_output = String::from_utf8_lossy(&output.stdout);
+                                for line in jc_output.lines() {
+                                    ui.label(egui::RichText::new(line).monospace().size(10.0));
+                                }
+                            });
+                    }
+                }
+            }
+            _ => {
+                // jc command failed - fail
+                ui.label("❌ jc --ps command failed or not supported on this platform");
+                ui.separator();
+                ui.label("Raw ps output for debugging:");
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for line in raw_text.lines() {
+                            ui.label(egui::RichText::new(line).monospace().size(10.0));
+                        }
+                    });
+            }
+        }
+    }
+}
+
+impl CommandControlBar for ProcessMonitorWidget {}
+
 
 impl ProcessMonitorWidget {
     pub fn new(id: usize) -> Self {
         Self {
             id,
-            processes: Arc::new(Mutex::new(Vec::new())),
-            is_running: Arc::new(Mutex::new(false)),
-            refresh_interval_ms: 1000, // 1 second refresh
+            version: 0,
+            refresh_interval_secs: 5,
+            max_processes: 20,
             sort_by: ProcessSortBy::CPU,
-            filter_text: String::new(),
-            auto_scroll: true,
-            max_processes: 100,
+            executor: CommandExecutor::new(),
+            config_unsaved: false,
         }
     }
-    
-    
-    
-    
-}
-
-async fn get_processes() -> Result<Vec<Process>, Box<dyn std::error::Error>> {
-    use tokio::process::Command;
-    
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("ps aux | jc --ps")
-        .output()
-        .await?;
-    
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    let json: Vec<Value> = serde_json::from_str(&json_str)?;
-    
-    let mut processes = Vec::new();
-    for item in json {
-        if let Value::Object(map) = item {
-            let process = Process {
-                user: map.get("user").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                pid: map.get("pid").and_then(|v| v.as_i64()).unwrap_or(0),
-                cpu_percent: map.get("cpu_percent").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                mem_percent: map.get("mem_percent").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                command: map.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                state: map.get("stat").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            };
-            processes.push(process);
-        }
-    }
-    
-    Ok(processes)
 }

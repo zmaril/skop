@@ -53,3 +53,8 @@ Can widget_type in mod be typechecked?
 Remove num_cpus? 
 
 Add the ping stuff back in 
+
+Make hosts be configurable, connections, unsure. Let's say hosts for now and have them be configured per investiatoin and then selectable per widget via dropdown,. 
+
+
+CLick events on investigation row sucks

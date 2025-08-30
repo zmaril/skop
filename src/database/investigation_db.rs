@@ -2,6 +2,7 @@ use sqlx::{SqlitePool, Row, sqlite::SqliteConnectOptions};
 use std::path::PathBuf;
 use crate::widgets::Widget;
 
+#[derive(Clone)]
 pub struct InvestigationDB {
     pool: SqlitePool,
 }
@@ -94,7 +95,7 @@ impl InvestigationDB {
         Ok(())
     }
     
-    pub async fn save_widget(&self, widget_id: i32, widget_type: &str, config_json: &str, 
+    pub async fn save_widget(&self, widget_id: i32, widget_version: i32, widget_type: &str, config_json: &str, 
                             pos_x: f32, pos_y: f32, size_x: f32, size_y: f32, collapsed: bool) -> Result<(), sqlx::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -102,10 +103,11 @@ impl InvestigationDB {
             .as_micros() as i64;
             
         sqlx::query(
-            "INSERT OR REPLACE INTO widgets (id, widget_type, config_json, position_x, position_y, size_x, size_y, created_at, active, collapsed) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+            "INSERT OR REPLACE INTO widgets (id, version, widget_type, config_json, position_x, position_y, size_x, size_y, created_at, collapsed) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(widget_id)
+        .bind(widget_version)
         .bind(widget_type)
         .bind(config_json)
         .bind(pos_x)
@@ -118,15 +120,16 @@ impl InvestigationDB {
         
         Ok(())
     }
-    
-    pub async fn log_data(&self, widget_id: i32, line_content: &str, line_number: i32) -> Result<(), sqlx::Error> {
+
+    pub async fn record_raw_data(&self, widget_id: i32, widget_version: i32, line_content: &str, line_number: i32) -> Result<(), sqlx::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_micros() as i64;
             
-        sqlx::query("INSERT INTO raw_data (widget_id, timestamp, line_content, line_number) VALUES (?, ?, ?, ?)")
+        sqlx::query("INSERT INTO raw_data (widget_id, widget_version, timestamp, line_content, line_number) VALUES (?, ?, ?, ?, ?)")
             .bind(widget_id)
+            .bind(widget_version)
             .bind(now)
             .bind(line_content)
             .bind(line_number)
@@ -135,14 +138,21 @@ impl InvestigationDB {
         Ok(())
     }
     
-    pub async fn load_widgets(&self) -> Result<Vec<(i32, String, String, f32, f32, f32, f32, bool)>, sqlx::Error> {
-        let rows = sqlx::query("SELECT id, widget_type, config_json, position_x, position_y, size_x, size_y, collapsed FROM widgets WHERE active = 1 AND archived_at IS NULL")
+    pub async fn load_widgets(&self) -> Result<Vec<(i32, i32, String, String, f32, f32, f32, f32, bool)>, sqlx::Error> {
+        // Only load the latest version of each widget
+        let rows = sqlx::query("
+            SELECT id, version, widget_type, config_json, position_x, position_y, size_x, size_y, collapsed 
+            FROM widgets w1
+            WHERE archived_at IS NULL 
+            AND version = (SELECT MAX(version) FROM widgets w2 WHERE w2.id = w1.id AND w2.archived_at IS NULL)
+        ")
             .fetch_all(&self.pool).await?;
             
         let mut widgets = Vec::new();
         for row in rows {
             widgets.push((
                 row.get::<i32, _>("id"),
+                row.get::<i32, _>("version"),
                 row.get::<String, _>("widget_type"),
                 row.get::<String, _>("config_json"),
                 row.get::<f32, _>("position_x"),
@@ -156,8 +166,8 @@ impl InvestigationDB {
         Ok(widgets)
     }
     
-    pub async fn load_widgets_at_time(&self, timestamp: i64) -> Result<Vec<(i32, String, String, f32, f32, f32, f32, bool)>, sqlx::Error> {
-        let rows = sqlx::query("SELECT id, widget_type, config_json, position_x, position_y, size_x, size_y, collapsed FROM widgets WHERE active = 1 AND created_at <= ? AND (archived_at IS NULL OR archived_at > ?)")
+    pub async fn load_widgets_at_time(&self, timestamp: i64) -> Result<Vec<(i32, i32, String, String, f32, f32, f32, f32, bool)>, sqlx::Error> {
+        let rows = sqlx::query("SELECT id, version, widget_type, config_json, position_x, position_y, size_x, size_y, collapsed FROM widgets WHERE created_at <= ? AND (archived_at IS NULL OR archived_at > ?)")
             .bind(timestamp)
             .bind(timestamp)
             .fetch_all(&self.pool).await?;
@@ -166,6 +176,7 @@ impl InvestigationDB {
         for row in rows {
             widgets.push((
                 row.get::<i32, _>("id"),
+                row.get::<i32, _>("version"),
                 row.get::<String, _>("widget_type"),
                 row.get::<String, _>("config_json"),
                 row.get::<f32, _>("position_x"),
@@ -181,10 +192,11 @@ impl InvestigationDB {
     
     pub async fn save_widget_instance(&self, widget: &crate::widgets::WidgetType) -> Result<(), sqlx::Error> {
         let widget_id = widget.widget_id() as i32;
+        let widget_version = widget.widget_version();
         let widget_type = widget.widget_type_name();
         let widget_json = serde_json::to_string(widget).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
         
-        self.save_widget(widget_id, widget_type, &widget_json, 0.0, 0.0, 600.0, 400.0, false).await
+        self.save_widget(widget_id, widget_version, widget_type, &widget_json, 0.0, 0.0, 600.0, 400.0, false).await
     }
     
     pub async fn load_widget_instances(&self) -> Result<Vec<crate::widgets::WidgetType>, Box<dyn std::error::Error>> {
@@ -193,7 +205,7 @@ impl InvestigationDB {
         let widgets_data = self.load_widgets().await?;
         let mut widgets = Vec::new();
         
-        for (_widget_id, widget_type, widget_json, _pos_x, _pos_y, _size_x, _size_y, _collapsed) in widgets_data {
+        for (_widget_id, _widget_version, widget_type, widget_json, _pos_x, _pos_y, _size_x, _size_y, _collapsed) in widgets_data {
             match serde_json::from_str::<WidgetType>(&widget_json) {
                 Ok(widget) => widgets.push(widget),
                 Err(e) => {
@@ -212,7 +224,7 @@ impl InvestigationDB {
         let widgets_data = self.load_widgets_at_time(timestamp).await?;
         let mut widgets = Vec::new();
         
-        for (_widget_id, widget_type, widget_json, _pos_x, _pos_y, _size_x, _size_y, _collapsed) in widgets_data {
+        for (_widget_id, _widget_version, widget_type, widget_json, _pos_x, _pos_y, _size_x, _size_y, _collapsed) in widgets_data {
             match serde_json::from_str::<WidgetType>(&widget_json) {
                 Ok(widget) => widgets.push(widget),
                 Err(e) => {
@@ -253,5 +265,19 @@ impl InvestigationDB {
     pub async fn remove_widget_instance(&self, widget: &crate::widgets::WidgetType) -> Result<(), sqlx::Error> {
         let widget_id = widget.widget_id() as i32;
         self.remove_widget(widget_id).await
+    }
+    
+    pub async fn get_widget_data(&self, widget_id: i32, widget_version: i32) -> Result<Vec<String>, sqlx::Error> {
+        let rows = sqlx::query("SELECT line_content FROM raw_data WHERE widget_id = ? AND widget_version = ? ORDER BY line_number ASC")
+            .bind(widget_id)
+            .bind(widget_version)
+            .fetch_all(&self.pool).await?;
+            
+        let mut lines = Vec::new();
+        for row in rows {
+            lines.push(row.get::<String, _>("line_content"));
+        }
+        
+        Ok(lines)
     }
 }

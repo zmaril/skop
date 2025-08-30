@@ -84,10 +84,10 @@ impl Skop {
                 
                 ui.separator();
                 
-                ui.label("SSH Commands:");
+                ui.label("Commands:");
                 ui.vertical(|ui| {
-                    if ui.button("SSH Command").clicked() {
-                        self.add_widget(WidgetType::new_ssh_command(self.next_widget_id));
+                    if ui.button("Command").clicked() {
+                        self.add_widget(WidgetType::new_raw_command(self.next_widget_id));
                     }
                 });
                 
