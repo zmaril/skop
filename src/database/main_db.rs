@@ -77,11 +77,18 @@ impl MainDB {
             .unwrap()
             .as_micros() as i64;
             
-        sqlx::query("UPDATE investigations SET last_accessed = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE investigations SET last_accessed = ? WHERE id = ?")
             .bind(now)
             .bind(investigation_id)
             .execute(&self.pool).await?;
         
+        if result.rows_affected() == 0 {
+            eprintln!("WARNING: No investigation found with ID {} to update last_accessed time", investigation_id);
+        } else {
+            println!("Successfully updated last_accessed for investigation ID {}", investigation_id);
+        }
+        
         Ok(())
     }
+    
 }

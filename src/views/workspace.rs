@@ -1,6 +1,7 @@
 use eframe::egui;
 use crate::{AppMode, Skop};
 use crate::widgets::{WidgetType, Widget};
+use crate::investigation::{Investigation, COLORS, find_color_name};
 
 impl Skop {
     pub fn render_investigation_workspace(&mut self, ctx: &egui::Context) {
@@ -11,6 +12,20 @@ impl Skop {
                     // Stop all widgets before leaving workspace
                     for widget in &self.widgets {
                         widget.stop();
+                    }
+                    
+                    // Reload investigations to reflect any changes made in workspace
+                    if let Some(ref main_db) = self.main_db {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        match rt.block_on(Investigation::load_all(main_db)) {
+                            Ok(investigations) => {
+                                self.investigations = investigations;
+                                println!("Reloaded {} investigations when returning to home", self.investigations.len());
+                            }
+                            Err(e) => {
+                                eprintln!("ERROR: Failed to reload investigations: {}", e);
+                            }
+                        }
                     }
                     
                     self.mode = AppMode::Home;
@@ -35,17 +50,28 @@ impl Skop {
             });
         });
         
+        // Extract data needed for UI to avoid borrowing conflicts
+        let investigation_data = self.current_investigation.as_ref().map(|inv| {
+            (inv.name.clone(), inv.description.clone(), inv.color.clone())
+        });
+        
+        // Track if we need to update investigation after UI
+        let mut should_update_investigation = false;
+        let mut new_name = String::new();
+        let mut new_description = String::new();
+        let mut new_color = [0.0, 0.0, 0.0];
+        
         // Left Sidebar - Widget Producer Menu
         egui::SidePanel::left("widget_menu")
             .resizable(false)
             .default_width(200.0)
             .show(ctx, |ui| {
-                if let Some(ref investigation) = self.current_investigation {
+                if let Some((name, description, color)) = &investigation_data {
                     // Create a muted version for background
                     let bg_color = egui::Color32::from_rgb(
-                        ((investigation.color[0] * 0.2 + 0.8) * 255.0) as u8,
-                        ((investigation.color[1] * 0.2 + 0.8) * 255.0) as u8,
-                        ((investigation.color[2] * 0.2 + 0.8) * 255.0) as u8,
+                        ((color[0] * 0.2 + 0.8) * 255.0) as u8,
+                        ((color[1] * 0.2 + 0.8) * 255.0) as u8,
+                        ((color[2] * 0.2 + 0.8) * 255.0) as u8,
                     );
                     
                     let response = ui.allocate_response(
@@ -58,11 +84,106 @@ impl Skop {
                     // Draw the text on top with proper padding
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(response.rect.shrink2(egui::vec2(10.0, 5.0))), |ui| {
                         ui.vertical_centered(|ui| {
-                            ui.heading(&investigation.name);
+                            ui.heading(name);
                         });
                     });
                     
                     ui.add_space(5.0);
+                    
+                    // Investigation editing controls using egui state management
+                    ui.collapsing("Edit Investigation", |ui| {
+                        // Use egui's persistent state for editing values
+                        let mut edit_name = ui.ctx().data_mut(|d| d.get_temp::<String>(egui::Id::new("edit_inv_name"))).unwrap_or_else(|| name.clone());
+                        let mut edit_desc = ui.ctx().data_mut(|d| d.get_temp::<String>(egui::Id::new("edit_inv_desc"))).unwrap_or_else(|| description.clone());
+                        let mut edit_color = ui.ctx().data_mut(|d| d.get_temp::<[f32; 3]>(egui::Id::new("edit_inv_color"))).unwrap_or(*color);
+                        
+                        ui.label("Name:");
+                        let name_changed = ui.text_edit_singleline(&mut edit_name).changed();
+                        if name_changed {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("edit_inv_name"), edit_name.clone()));
+                        }
+                        
+                        ui.add_space(5.0);
+                        
+                        ui.label("Description:");
+                        let desc_changed = ui.text_edit_multiline(&mut edit_desc).changed();
+                        if desc_changed {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("edit_inv_desc"), edit_desc.clone()));
+                        }
+                        
+                        ui.add_space(5.0);
+                        
+                        ui.label("Color:");
+                        
+                        // Find current color name
+                        let current_color_name = find_color_name(edit_color).unwrap_or("Unknown");
+                        let mut selected_color_name = ui.ctx().data_mut(|d| 
+                            d.get_temp::<String>(egui::Id::new("edit_inv_color_name"))
+                        ).unwrap_or_else(|| current_color_name.to_string());
+                        
+                        let mut color_changed = false;
+                        
+                        egui::ComboBox::from_label("")
+                            .selected_text(&selected_color_name)
+                            .show_ui(ui, |ui| {
+                                for (color_name, color_rgb) in COLORS {
+                                    let was_selected = ui.selectable_value(&mut selected_color_name, color_name.to_string(), *color_name).clicked();
+                                    if was_selected {
+                                        edit_color = *color_rgb;
+                                        color_changed = true;
+                                    }
+                                }
+                            });
+                        
+                        if color_changed {
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(egui::Id::new("edit_inv_color"), edit_color);
+                                d.insert_temp(egui::Id::new("edit_inv_color_name"), selected_color_name);
+                            });
+                        }
+                        
+                        // Show color preview
+                        let color_preview = egui::Color32::from_rgb(
+                            (edit_color[0] * 255.0) as u8,
+                            (edit_color[1] * 255.0) as u8,
+                            (edit_color[2] * 255.0) as u8,
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("Preview:");
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 2.0, color_preview);
+                        });
+                        
+                        ui.add_space(10.0);
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Save Changes").clicked() {
+                                should_update_investigation = true;
+                                new_name = edit_name.clone();
+                                new_description = edit_desc.clone();
+                                new_color = edit_color;
+                                
+                                // Clear the temp data after saving
+                                ui.ctx().data_mut(|d| {
+                                    d.remove::<String>(egui::Id::new("edit_inv_name"));
+                                    d.remove::<String>(egui::Id::new("edit_inv_desc"));
+                                    d.remove::<[f32; 3]>(egui::Id::new("edit_inv_color"));
+                                    d.remove::<String>(egui::Id::new("edit_inv_color_name"));
+                                });
+                            }
+                            
+                            if ui.button("Reset").clicked() {
+                                // Clear temp data to reset to original values
+                                ui.ctx().data_mut(|d| {
+                                    d.remove::<String>(egui::Id::new("edit_inv_name"));
+                                    d.remove::<String>(egui::Id::new("edit_inv_desc"));
+                                    d.remove::<[f32; 3]>(egui::Id::new("edit_inv_color"));
+                                    d.remove::<String>(egui::Id::new("edit_inv_color_name"));
+                                });
+                            }
+                        });
+                    });
+                    
                     ui.separator();
                 }
                 
@@ -105,6 +226,40 @@ impl Skop {
                 ui.label(format!("Active Widgets: {}", self.widgets.len()));
             });
         
+        // Handle investigation updates after UI to avoid borrowing conflicts
+        if should_update_investigation {
+            if let Some(ref mut investigation) = self.current_investigation {
+                investigation.name = new_name.clone();
+                investigation.description = new_description.clone();
+                investigation.color = new_color;
+                
+                // Update investigation metadata in database
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(investigation.update_metadata()) {
+                    Ok(()) => {
+                        println!("Successfully updated investigation metadata");
+                    }
+                    Err(e) => {
+                        eprintln!("ERROR: Failed to update investigation metadata: {}", e);
+                        eprintln!("Investigation: {}", investigation.name);
+                        eprintln!("Database path: {:?}", investigation.file_path);
+                    }
+                }
+                
+                // Update last accessed time in main database
+                if let Some(ref main_db) = self.main_db {
+                    match rt.block_on(investigation.update_last_accessed(main_db)) {
+                        Ok(()) => {
+                            println!("Successfully updated last accessed time");
+                        }
+                        Err(e) => {
+                            eprintln!("ERROR: Failed to update last accessed time: {}", e);
+                            eprintln!("Investigation ID: {:?}", investigation.id);
+                        }
+                    }
+                }
+            }
+        }
         
         // Render all widgets
         let mut widgets_to_remove = vec![];

@@ -2,7 +2,7 @@ Goal:
 Make something good and usable 
 
 Now:
-
+Keep plugging along 
 --
 Store all the lines 
 Replay the lines 
@@ -58,3 +58,8 @@ Make hosts be configurable, connections, unsure. Let's say hosts for now and hav
 
 
 CLick events on investigation row sucks
+
+ps output might be parsed working
+for refreshed commands, check if the data is comiing in all together or in batches 
+
+Fix rust 

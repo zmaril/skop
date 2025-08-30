@@ -86,11 +86,17 @@ impl InvestigationDB {
     pub async fn update_metadata(&self, name: &str, description: &str, color: &[f32; 3]) -> Result<(), sqlx::Error> {
         let color_string = format!("{},{},{}", color[0], color[1], color[2]);
         
-        sqlx::query("UPDATE metadata SET name = ?, description = ?, color_rgb = ? WHERE rowid = 1")
+        let result = sqlx::query("UPDATE metadata SET name = ?, description = ?, color_rgb = ? WHERE rowid = 1")
             .bind(name)
             .bind(description)
             .bind(color_string)
             .execute(&self.pool).await?;
+            
+        if result.rows_affected() == 0 {
+            eprintln!("WARNING: No rows were updated in metadata table. The metadata table may be empty.");
+        } else {
+            println!("Successfully updated {} row(s) in metadata table", result.rows_affected());
+        }
             
         Ok(())
     }
