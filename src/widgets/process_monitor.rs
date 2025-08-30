@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::runtime::Runtime;
 use eframe::egui;
+use serde::{Serialize, Deserialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -14,17 +15,29 @@ pub struct Process {
     pub state: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ProcessMonitorWidget {
     pub id: usize,
-    pub processes: Arc<Mutex<Vec<Process>>>,
-    pub is_running: Arc<Mutex<bool>>,
     pub refresh_interval_ms: u64,
+    pub auto_scroll: bool,
+    pub max_processes: usize,
     pub sort_by: ProcessSortBy,
     pub filter_text: String,
+    #[serde(skip, default = "default_processes")]
+    pub processes: Arc<Mutex<Vec<Process>>>,
+    #[serde(skip, default = "default_running")]
+    pub is_running: Arc<Mutex<bool>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+fn default_processes() -> Arc<Mutex<Vec<Process>>> {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn default_running() -> Arc<Mutex<bool>> {
+    Arc::new(Mutex::new(false))
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProcessSortBy {
     CPU,
     Memory,
@@ -32,19 +45,17 @@ pub enum ProcessSortBy {
     Name,
 }
 
-impl ProcessMonitorWidget {
-    pub fn new(id: usize) -> Self {
-        Self {
-            id,
-            processes: Arc::new(Mutex::new(Vec::new())),
-            is_running: Arc::new(Mutex::new(false)),
-            refresh_interval_ms: 1000, // 1 second refresh
-            sort_by: ProcessSortBy::CPU,
-            filter_text: String::new(),
-        }
+impl crate::widgets::Widget for ProcessMonitorWidget {
+    fn widget_type_name(&self) -> &'static str {
+        "process_monitor"
     }
     
-    pub fn execute(&self) {
+    fn widget_id(&self) -> usize {
+        self.id
+    }
+    
+    
+    fn start(&self) {
         let processes = self.processes.clone();
         let is_running = self.is_running.clone();
         let refresh_interval_ms = self.refresh_interval_ms;
@@ -69,11 +80,11 @@ impl ProcessMonitorWidget {
         });
     }
     
-    pub fn stop(&self) {
+    fn stop(&self) {
         *self.is_running.lock().unwrap() = false;
     }
     
-    pub fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
+    fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
         let is_running = *self.is_running.lock().unwrap();
         let mut open = true;
         let mut refresh_clicked = false;
@@ -211,6 +222,25 @@ impl ProcessMonitorWidget {
         
         (open, refresh_clicked)
     }
+}
+
+impl ProcessMonitorWidget {
+    pub fn new(id: usize) -> Self {
+        Self {
+            id,
+            processes: Arc::new(Mutex::new(Vec::new())),
+            is_running: Arc::new(Mutex::new(false)),
+            refresh_interval_ms: 1000, // 1 second refresh
+            sort_by: ProcessSortBy::CPU,
+            filter_text: String::new(),
+            auto_scroll: true,
+            max_processes: 100,
+        }
+    }
+    
+    
+    
+    
 }
 
 async fn get_processes() -> Result<Vec<Process>, Box<dyn std::error::Error>> {

@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::runtime::Runtime;
 use eframe::egui;
+use serde::{Serialize, Deserialize};
 use kira::{
     sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings},
     AudioManager, AudioManagerSettings, DefaultBackend, Tween, Value, Decibels,
@@ -18,15 +19,202 @@ pub struct CPUSound {
     pub base_frequency: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CPUMonitorWidget {
     pub id: usize,
-    pub cpu_data: Arc<Mutex<Vec<CPUUsage>>>,
-    pub is_running: Arc<Mutex<bool>>,
-    pub refresh_interval_ms: u64, // milliseconds
-    pub audio_manager: Option<Arc<Mutex<AudioManager<DefaultBackend>>>>,
-    pub cpu_sounds: Arc<Mutex<Vec<CPUSound>>>,
+    pub refresh_interval_ms: u64,
     pub audio_enabled: bool,
+    #[serde(skip, default = "default_cpu_data")]
+    pub cpu_data: Arc<Mutex<Vec<CPUUsage>>>,
+    #[serde(skip, default = "default_running")]
+    pub is_running: Arc<Mutex<bool>>,
+    #[serde(skip, default)]
+    pub audio_manager: Option<Arc<Mutex<AudioManager<DefaultBackend>>>>,
+    #[serde(skip, default = "default_cpu_sounds")]
+    pub cpu_sounds: Arc<Mutex<Vec<CPUSound>>>,
+}
+
+fn default_cpu_data() -> Arc<Mutex<Vec<CPUUsage>>> {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn default_running() -> Arc<Mutex<bool>> {
+    Arc::new(Mutex::new(false))
+}
+
+fn default_cpu_sounds() -> Arc<Mutex<Vec<CPUSound>>> {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+impl crate::widgets::Widget for CPUMonitorWidget {
+    fn widget_type_name(&self) -> &'static str {
+        "cpu_monitor"
+    }
+    
+    fn widget_id(&self) -> usize {
+        self.id
+    }
+    
+    
+    fn start(&self) {
+        if *self.is_running.lock().unwrap() {
+            return; // Already running
+        }
+        
+        *self.is_running.lock().unwrap() = true;
+        
+        let cpu_data = self.cpu_data.clone();
+        let is_running = self.is_running.clone();
+        let refresh_interval_ms = self.refresh_interval_ms;
+        let widget_clone = self.clone();
+        let cpu_sounds = self.cpu_sounds.clone();
+        let audio_enabled = self.audio_enabled;
+        
+        thread::spawn(move || {
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async {
+                // Setup audio for detected CPU cores
+                let num_cpus = num_cpus::get();
+                widget_clone.setup_audio_for_cpus(num_cpus);
+                
+                while *is_running.lock().unwrap() {
+                    match get_cpu_usage().await {
+                        Ok(usage_data) => {
+                            
+                            // Update CPU data
+                            *cpu_data.lock().unwrap() = usage_data.clone();
+                            
+                            // Update audio
+                            if audio_enabled {
+                                widget_clone.update_cpu_audio(&usage_data);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error getting CPU usage: {}", e);
+                        }
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(refresh_interval_ms)).await;
+                }
+                
+                // Stop all sounds when monitoring stops but keep them for restart
+                if let Ok(mut sounds) = cpu_sounds.lock() {
+                    for sound in sounds.iter_mut() {
+                        sound.handle.stop(Tween::default());
+                    }
+                }
+            });
+        });
+    }
+    
+    fn stop(&self) {
+        *self.is_running.lock().unwrap() = false;
+        
+        // Stop all sounds immediately but keep them for restart
+        if let Ok(mut sounds) = self.cpu_sounds.lock() {
+            for sound in sounds.iter_mut() {
+                sound.handle.stop(Tween::default());
+            }
+        }
+    }
+    
+    fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
+        let is_running = *self.is_running.lock().unwrap();
+        let mut open = true;
+        let mut refresh_clicked = false;
+        
+        egui::Window::new("CPU Monitor")
+            .id(egui::Id::new(format!("cpu_widget_{}", self.id)))
+            .open(&mut open)
+            .default_pos([250.0 + (idx as f32 * 50.0), 100.0 + (idx as f32 * 50.0)])
+            .default_size([400.0, 300.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                let cpu_data = self.cpu_data.lock().unwrap();
+                let has_data = !cpu_data.is_empty();
+                drop(cpu_data);
+                
+                if is_running {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Monitoring...");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Stop").clicked() {
+                                self.stop();
+                            }
+                            ui.checkbox(&mut self.audio_enabled, "🔊 Audio");
+                        });
+                    });
+                    ui.separator();
+                } else if has_data {
+                    ui.horizontal(|ui| {
+                        ui.label("Stopped");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Restart").clicked() {
+                                refresh_clicked = true;
+                            }
+                        });
+                    });
+                    ui.separator();
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("Ready");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Start Monitor").clicked() {
+                                refresh_clicked = true;
+                            }
+                        });
+                    });
+                    ui.separator();
+                }
+                
+                // CPU Usage Table
+                let cpu_data = self.cpu_data.lock().unwrap();
+                if cpu_data.is_empty() && !is_running {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Click 'Start Monitor' to view CPU usage");
+                    });
+                } else if cpu_data.is_empty() && is_running {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Loading CPU data...");
+                    });
+                } else {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            use egui_extras::{TableBuilder, Column};
+                            
+                            TableBuilder::new(ui)
+                                .striped(true)
+                                .resizable(true)
+                                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                .column(Column::initial(120.0).resizable(true))
+                                .column(Column::initial(80.0).resizable(true))
+                                .header(20.0, |mut header| {
+                                    header.col(|ui| {
+                                        ui.strong("CPU Core");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("Usage %");
+                                    });
+                                })
+                                .body(|mut body| {
+                                    for cpu in cpu_data.iter() {
+                                        body.row(18.0, |mut row| {
+                                            row.col(|ui| {
+                                                ui.label(&cpu.core_id);
+                                            });
+                                            row.col(|ui| {
+                                                ui.label(format!("{:.1}%", cpu.usage_percent));
+                                            });
+                                        });
+                                    }
+                                });
+                        });
+                }
+            });
+        
+        (open, refresh_clicked)
+    }
 }
 
 impl CPUMonitorWidget {
@@ -140,167 +328,8 @@ impl CPUMonitorWidget {
         }
     }
     
-    pub fn execute(&self) {
-        let cpu_data = self.cpu_data.clone();
-        let is_running = self.is_running.clone();
-        let refresh_interval_ms = self.refresh_interval_ms;
-        let cpu_sounds = self.cpu_sounds.clone();
-        let audio_enabled = self.audio_enabled;
-        
-        // First, get CPU count and setup audio
-        let widget_clone = self.clone();
-        
-        *is_running.lock().unwrap() = true;
-        
-        thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async {
-                // Setup audio on first run
-                let mut audio_setup = false;
-                
-                while *is_running.lock().unwrap() {
-                    match get_cpu_usage().await {
-                        Ok(usage_data) => {
-                            // Setup audio if not done yet
-                            if !audio_setup && audio_enabled {
-                                widget_clone.setup_audio_for_cpus(usage_data.len());
-                                audio_setup = true;
-                            }
-                            
-                            // Update CPU data
-                            *cpu_data.lock().unwrap() = usage_data.clone();
-                            
-                            // Update audio
-                            if audio_enabled {
-                                widget_clone.update_cpu_audio(&usage_data);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error getting CPU usage: {}", e);
-                        }
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(refresh_interval_ms)).await;
-                }
-                
-                // Stop all sounds when monitoring stops
-                if let Ok(mut sounds) = cpu_sounds.lock() {
-                    for mut sound in sounds.drain(..) {
-                        sound.handle.stop(Tween::default());
-                    }
-                }
-            });
-        });
-    }
     
-    pub fn stop(&self) {
-        *self.is_running.lock().unwrap() = false;
-        
-        // Stop all sounds immediately
-        if let Ok(mut sounds) = self.cpu_sounds.lock() {
-            for mut sound in sounds.drain(..) {
-                sound.handle.stop(Tween::default());
-            }
-        }
-    }
     
-    pub fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
-        let is_running = *self.is_running.lock().unwrap();
-        let mut open = true;
-        let mut refresh_clicked = false;
-        
-        egui::Window::new("CPU Monitor")
-            .id(egui::Id::new(format!("cpu_widget_{}", self.id)))
-            .open(&mut open)
-            .default_pos([250.0 + (idx as f32 * 50.0), 100.0 + (idx as f32 * 50.0)])
-            .default_size([400.0, 300.0])
-            .resizable(true)
-            .show(ctx, |ui| {
-                let cpu_data = self.cpu_data.lock().unwrap();
-                let has_data = !cpu_data.is_empty();
-                drop(cpu_data);
-                
-                if is_running {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Monitoring...");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Stop").clicked() {
-                                self.stop();
-                            }
-                            ui.checkbox(&mut self.audio_enabled, "🔊 Audio");
-                        });
-                    });
-                    ui.separator();
-                } else if has_data {
-                    ui.horizontal(|ui| {
-                        ui.label("Stopped");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Restart").clicked() {
-                                refresh_clicked = true;
-                            }
-                        });
-                    });
-                    ui.separator();
-                } else {
-                    ui.horizontal(|ui| {
-                        ui.label("Ready");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Start Monitor").clicked() {
-                                refresh_clicked = true;
-                            }
-                        });
-                    });
-                    ui.separator();
-                }
-                
-                // CPU Usage Table
-                let cpu_data = self.cpu_data.lock().unwrap();
-                if cpu_data.is_empty() && !is_running {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("Click 'Start Monitor' to view CPU usage");
-                    });
-                } else if cpu_data.is_empty() && is_running {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("Loading CPU data...");
-                    });
-                } else {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            use egui_extras::{TableBuilder, Column};
-                            
-                            TableBuilder::new(ui)
-                                .striped(true)
-                                .resizable(true)
-                                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                .column(Column::initial(120.0).resizable(true))
-                                .column(Column::initial(80.0).resizable(true))
-                                .header(20.0, |mut header| {
-                                    header.col(|ui| {
-                                        ui.strong("CPU Core");
-                                    });
-                                    header.col(|ui| {
-                                        ui.strong("Usage %");
-                                    });
-                                })
-                                .body(|mut body| {
-                                    for cpu in cpu_data.iter() {
-                                        body.row(18.0, |mut row| {
-                                            row.col(|ui| {
-                                                ui.label(&cpu.core_id);
-                                            });
-                                            row.col(|ui| {
-                                                ui.label(format!("{:.1}%", cpu.usage_percent));
-                                            });
-                                        });
-                                    }
-                                });
-                        });
-                }
-            });
-        
-        (open, refresh_clicked)
-    }
 }
 
 async fn get_cpu_usage() -> Result<Vec<CPUUsage>, Box<dyn std::error::Error>> {

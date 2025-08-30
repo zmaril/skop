@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::runtime::Runtime;
 use eframe::egui;
+use serde::{Serialize, Deserialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -14,29 +15,38 @@ pub struct NetworkConnection {
     pub state: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NetworkMonitorWidget {
     pub id: usize,
-    pub connections: Arc<Mutex<Vec<NetworkConnection>>>,
-    pub is_running: Arc<Mutex<bool>>,
     pub refresh_interval_ms: u64,
     pub filter_text: String,
     pub show_established_only: bool,
+    pub auto_scroll: bool,
+    #[serde(skip, default = "default_connections")]
+    pub connections: Arc<Mutex<Vec<NetworkConnection>>>,
+    #[serde(skip, default = "default_running")]
+    pub is_running: Arc<Mutex<bool>>,
 }
 
-impl NetworkMonitorWidget {
-    pub fn new(id: usize) -> Self {
-        Self {
-            id,
-            connections: Arc::new(Mutex::new(Vec::new())),
-            is_running: Arc::new(Mutex::new(false)),
-            refresh_interval_ms: 2000, // 2 second refresh
-            filter_text: String::new(),
-            show_established_only: false,
-        }
+fn default_connections() -> Arc<Mutex<Vec<NetworkConnection>>> {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn default_running() -> Arc<Mutex<bool>> {
+    Arc::new(Mutex::new(false))
+}
+
+impl crate::widgets::Widget for NetworkMonitorWidget {
+    fn widget_type_name(&self) -> &'static str {
+        "network_monitor"
     }
     
-    pub fn execute(&self) {
+    fn widget_id(&self) -> usize {
+        self.id
+    }
+    
+    
+    fn start(&self) {
         let connections = self.connections.clone();
         let is_running = self.is_running.clone();
         let refresh_interval_ms = self.refresh_interval_ms;
@@ -61,11 +71,11 @@ impl NetworkMonitorWidget {
         });
     }
     
-    pub fn stop(&self) {
+    fn stop(&self) {
         *self.is_running.lock().unwrap() = false;
     }
     
-    pub fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
+    fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
         let is_running = *self.is_running.lock().unwrap();
         let mut open = true;
         let mut refresh_clicked = false;
@@ -179,6 +189,24 @@ impl NetworkMonitorWidget {
         
         (open, refresh_clicked)
     }
+}
+
+impl NetworkMonitorWidget {
+    pub fn new(id: usize) -> Self {
+        Self {
+            id,
+            connections: Arc::new(Mutex::new(Vec::new())),
+            is_running: Arc::new(Mutex::new(false)),
+            refresh_interval_ms: 2000, // 2 second refresh
+            filter_text: String::new(),
+            show_established_only: false,
+            auto_scroll: true,
+        }
+    }
+    
+    
+    
+    
 }
 
 async fn get_network_connections() -> Result<Vec<NetworkConnection>, Box<dyn std::error::Error>> {

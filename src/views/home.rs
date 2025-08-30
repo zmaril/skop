@@ -71,6 +71,9 @@ impl Skop {
             }
         }
         
+        // Handle investigation selection - store the clicked investigation
+        let mut selected_investigation: Option<Investigation> = None;
+        
         // Left panel - Investigations list
         egui::SidePanel::left("investigations_panel")
             .default_width(400.0)
@@ -110,13 +113,7 @@ impl Skop {
                             
                             // Click to open investigation
                             if response.clicked() {
-                                self.current_investigation = Some(investigation.clone());
-                                self.mode = AppMode::InvestigationWorkspace;
-                                
-                                if let Some(ref db) = self.main_db {
-                                    let rt = tokio::runtime::Runtime::new().unwrap();
-                                    let _ = rt.block_on(investigation.update_last_accessed(db));
-                                }
+                                selected_investigation = Some(investigation.clone());
                             }
                             
                             // Content within the rect
@@ -145,6 +142,26 @@ impl Skop {
                     });
                 }
             });
+        
+        // Handle investigation selection outside the borrow
+        if let Some(investigation) = selected_investigation {
+            self.current_investigation = Some(investigation.clone());
+            
+            // Clear existing widgets
+            self.widgets.clear();
+            
+            // Load saved widgets from database
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            if let Err(e) = rt.block_on(self.load_widgets_from_db(&investigation)) {
+                eprintln!("Failed to load widgets: {}", e);
+            }
+            
+            self.mode = AppMode::InvestigationWorkspace;
+            
+            if let Some(ref db) = self.main_db {
+                let _ = rt.block_on(investigation.update_last_accessed(db));
+            }
+        }
         
         // Central panel - Title and new investigation
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -182,6 +199,8 @@ impl Skop {
                                     println!("Investigation created successfully");
                                     self.investigations.push(investigation.clone());
                                     self.current_investigation = Some(investigation);
+                                    // Clear widgets for new investigation
+                                    self.widgets.clear();
                                     self.mode = AppMode::InvestigationWorkspace;
                                 }
                                 Err(e) => println!("Failed to create investigation: {}", e),

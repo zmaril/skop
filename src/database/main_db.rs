@@ -23,56 +23,41 @@ impl MainDB {
     }
     
     async fn initialize(&mut self) -> Result<(), sqlx::Error> {
-        // Run SQLx migrations
-        sqlx::migrate!("./migrations").run(&self.pool).await?;
+        // Run SQLx migrations for main database
+        sqlx::migrate!("./migrations/main").run(&self.pool).await?;
         Ok(())
     }
     
-    pub async fn add_investigation(&self, name: &str, file_path: &str, color: &[f32; 3]) -> Result<i64, sqlx::Error> {
+    pub async fn add_investigation(&self, file_path: &str) -> Result<i64, sqlx::Error> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_micros() as i64;
             
-        let color_string = format!("{},{},{}", color[0], color[1], color[2]);
-            
         let result = sqlx::query(
-            "INSERT INTO investigations (name, file_path, created_at, last_accessed, archived, color_rgb) VALUES (?, ?, ?, ?, 0, ?)"
+            "INSERT INTO investigations (file_path, created_at, last_accessed, archived) VALUES (?, ?, ?, 0)"
         )
-        .bind(name)
         .bind(file_path)
         .bind(now)
         .bind(now)
-        .bind(color_string)
         .execute(&self.pool).await?;
         
         Ok(result.last_insert_rowid())
     }
     
-    pub async fn list_investigations(&self) -> Result<Vec<(i64, String, String, i64, i64, [f32; 3])>, sqlx::Error> {
+    pub async fn list_investigations(&self) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, name, file_path, created_at, last_accessed, 
-             color_rgb 
+            "SELECT id, file_path, created_at, last_accessed 
              FROM investigations WHERE archived = 0 ORDER BY last_accessed DESC"
         ).fetch_all(&self.pool).await?;
         
         let mut investigations = Vec::new();
         for row in rows {
-            let color_string = row.get::<String, _>("color_rgb");
-            let color_parts: Vec<&str> = color_string.split(',').collect();
-            let color = [
-                color_parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0.2),
-                color_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.4),
-                color_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.85),
-            ];
-            
             investigations.push((
                 row.get::<i64, _>("id"),
-                row.get::<String, _>("name"),
                 row.get::<String, _>("file_path"),
                 row.get::<i64, _>("created_at"),
                 row.get::<i64, _>("last_accessed"),
-                color,
             ));
         }
         

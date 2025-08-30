@@ -74,11 +74,11 @@ impl Investigation {
     }
     
     pub async fn create(&mut self, main_db: &MainDB) -> Result<(), sqlx::Error> {
-        // Create the investigation database file
-        let _investigation_db = InvestigationDB::create(&self.file_path, &self.name, &self.description).await?;
+        // Create the investigation database file with name, description, and color
+        let _investigation_db = InvestigationDB::create(&self.file_path, &self.name, &self.description, &self.color).await?;
         
-        // Add to main database registry
-        let id = main_db.add_investigation(&self.name, &self.file_path.to_string_lossy(), &self.color).await?;
+        // Add to main database registry (only file path and timestamps)
+        let id = main_db.add_investigation(&self.file_path.to_string_lossy()).await?;
         self.id = Some(id);
         
         Ok(())
@@ -88,16 +88,23 @@ impl Investigation {
         let rows = main_db.list_investigations().await?;
         let mut investigations = Vec::new();
         
-        for (id, name, file_path, created_at, last_accessed, color) in rows {
-            investigations.push(Investigation {
-                id: Some(id),
-                name,
-                description: String::new(), // Will be loaded from file when needed
-                file_path: PathBuf::from(file_path),
-                created_at,
-                last_accessed,
-                color,
-            });
+        for (id, file_path, created_at, last_accessed) in rows {
+            let path_buf = PathBuf::from(&file_path);
+            
+            // Try to load metadata from the investigation file
+            if let Ok(db) = InvestigationDB::open(&path_buf).await {
+                if let Ok(Some((name, description, color, _created_at, _version))) = db.get_metadata().await {
+                    investigations.push(Investigation {
+                        id: Some(id),
+                        name,
+                        description,
+                        file_path: path_buf,
+                        created_at,
+                        last_accessed,
+                        color,
+                    });
+                }
+            }
         }
         
         Ok(investigations)
@@ -109,8 +116,10 @@ impl Investigation {
     
     pub async fn load_metadata(&mut self) -> Result<(), sqlx::Error> {
         let db = self.open().await?;
-        if let Some(desc) = db.get_metadata("description").await? {
-            self.description = desc;
+        if let Some((name, description, color, _created_at, _version)) = db.get_metadata().await? {
+            self.name = name;
+            self.description = description;
+            self.color = color;
         }
         Ok(())
     }

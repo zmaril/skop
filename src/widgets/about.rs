@@ -1,16 +1,22 @@
 use eframe::egui;
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AboutWidget {
     pub id: usize,
 }
 
-impl AboutWidget {
-    pub fn new(id: usize) -> Self {
-        Self { id }
+impl crate::widgets::Widget for AboutWidget {
+    fn widget_type_name(&self) -> &'static str {
+        "about"
     }
     
-    pub fn render(&mut self, ctx: &egui::Context, idx: usize) -> bool {
+    fn widget_id(&self) -> usize {
+        self.id
+    }
+    
+    
+    fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool) {
         let mut open = true;
         
         egui::Window::new("About Skop")
@@ -63,13 +69,14 @@ impl AboutWidget {
                 });
             });
         
-        open
+        (open, false)
     }
 }
 
-// About widget doesn't need execute functionality
 impl AboutWidget {
-    pub fn execute(&self) {
-        // No-op for about widget
+    pub fn new(id: usize) -> Self {
+        Self { id }
     }
+    
 }
+

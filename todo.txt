@@ -22,7 +22,34 @@ Escape out of things
 Copy and paste out of it 
 Pivot tables
 
+Spreadsheet 
+Logs 
+Canvas/Lighttable 
+Pivot tables 
+
+CPU sounds keep going after cpu thing is gone. 
 
 https://github.com/neferdata/allms llm's for some reason? 
 
 ssh bastion 
+
+Command (build ssh into everything)
+
+WidgetType feels repitive.
+
+Save widget config after each interaction? 
+
+Make collapse saving work. Just not working right now, because th estate isn't part of the widget config, it's part of egui directly. 
+
+
+Persistence is better but eh. 
+
+Make it possible to edit color and name. 
+Add overview of things to investigation list. 
+
+Pause everything button. 
+
+Can widget_type in mod be typechecked? 
+Remove num_cpus? 
+
+Add the ping stuff back in 

@@ -34,7 +34,7 @@ fn main() -> eframe::Result {
     )
 }
 
-use widgets::WidgetType;
+use widgets::{WidgetType, Widget};
 use investigation::Investigation;
 use database::main_db::MainDB;
 
@@ -63,10 +63,6 @@ pub struct Skop {
     pub widgets: Vec<WidgetType>,
     pub next_widget_id: usize,
     
-    // Configuration dialogs
-    pub show_ssh_config: bool,
-    pub config_hostname: String,
-    pub config_command: String,
 }
 
 impl Skop {
@@ -93,17 +89,41 @@ impl Skop {
             
             widgets: vec![],
             next_widget_id: 0,
-            
-            show_ssh_config: false,
-            config_hostname: String::from("localhost"),
-            config_command: String::from(""),
         }
     }
     
     pub fn add_widget(&mut self, widget: WidgetType) {
-        widget.execute(); // Auto-execute before adding
+        widget.start(); // Auto-start before adding
+        
+        // Auto-save widget to investigation database
+        if let Some(ref current_investigation) = self.current_investigation {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            if let Err(e) = rt.block_on(async {
+                let db = current_investigation.open().await?;
+                db.save_widget_instance(&widget).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }) {
+                eprintln!("Failed to save widget: {}", e);
+            }
+        }
+        
         self.widgets.push(widget);
         self.next_widget_id += 1;
+    }
+    
+    pub async fn load_widgets_from_db(&mut self, investigation: &Investigation) -> Result<(), Box<dyn std::error::Error>> {
+        let db = investigation.open().await?;
+        let loaded_widgets = db.load_widget_instances().await?;
+        
+        for widget in loaded_widgets {
+            let widget_id = widget.widget_id();
+            
+            self.widgets.push(widget);
+            if widget_id >= self.next_widget_id {
+                self.next_widget_id = widget_id + 1;
+            }
+        }
+        
+        Ok(())
     }
 }
 
@@ -140,6 +160,15 @@ impl eframe::App for Skop {
             AppMode::Settings => self.render_settings(ctx),
             AppMode::About => self.render_about(ctx),
             AppMode::Help => self.render_help(ctx),
+        }
+    }
+}
+
+impl Drop for Skop {
+    fn drop(&mut self) {
+        // Stop all widgets when app is closing
+        for widget in &self.widgets {
+            widget.stop();
         }
     }
 }

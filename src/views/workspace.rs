@@ -1,6 +1,6 @@
 use eframe::egui;
 use crate::{AppMode, Skop};
-use crate::widgets::{WidgetType, SSHCommandWidget, CPUMonitorWidget, SystemInfoWidget, ProcessMonitorWidget, NetworkMonitorWidget, AboutWidget};
+use crate::widgets::{WidgetType, Widget};
 
 impl Skop {
     pub fn render_investigation_workspace(&mut self, ctx: &egui::Context) {
@@ -8,12 +8,21 @@ impl Skop {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 if ui.button("Home").clicked() {
+                    // Stop all widgets before leaving workspace
+                    for widget in &self.widgets {
+                        widget.stop();
+                    }
+                    
                     self.mode = AppMode::Home;
                     self.home_quote_index = 0; // Reset to trigger new quote selection
                 }
                 
                 ui.menu_button("View", |ui| {
                     if ui.button("Clear All Widgets").clicked() {
+                        // Stop all widgets before clearing
+                        for widget in &self.widgets {
+                            widget.stop();
+                        }
                         self.widgets.clear();
                     }
                 });
@@ -60,24 +69,16 @@ impl Skop {
                 ui.label("System Monitoring:");
                 ui.vertical(|ui| {
                     if ui.button("CPU Monitor").clicked() {
-                        let widget = CPUMonitorWidget::new(self.next_widget_id);
-                        self.add_widget(WidgetType::CPUMonitor(widget));
+                        self.add_widget(WidgetType::new_cpu_monitor(self.next_widget_id));
                     }
                     if ui.button("Process Monitor").clicked() {
-                        let widget = ProcessMonitorWidget::new(self.next_widget_id);
-                        self.add_widget(WidgetType::ProcessMonitor(widget));
+                        self.add_widget(WidgetType::new_process_monitor(self.next_widget_id));
                     }
                     if ui.button("Network Monitor").clicked() {
-                        let widget = NetworkMonitorWidget::new(self.next_widget_id);
-                        self.add_widget(WidgetType::NetworkMonitor(widget));
+                        self.add_widget(WidgetType::new_network_monitor(self.next_widget_id));
                     }
                     if ui.button("System Info").clicked() {
-                        let widget = SystemInfoWidget::new(self.next_widget_id, "hardware".to_string());
-                        self.add_widget(WidgetType::SystemInfo(widget));
-                    }
-                    if ui.button("Activity Monitor").clicked() {
-                        let widget = SystemInfoWidget::new(self.next_widget_id, "activity".to_string());
-                        self.add_widget(WidgetType::SystemInfo(widget));
+                        self.add_widget(WidgetType::new_system_info(self.next_widget_id));
                     }
                 });
                 
@@ -85,28 +86,8 @@ impl Skop {
                 
                 ui.label("SSH Commands:");
                 ui.vertical(|ui| {
-                    if ui.button("Custom SSH").clicked() {
-                        self.show_ssh_config = true;
-                    }
-                    if ui.button("File List").clicked() {
-                        let widget = SSHCommandWidget::new(self.next_widget_id, "localhost".to_string(), "ls -la".to_string());
-                        self.add_widget(WidgetType::SSHCommand(widget));
-                    }
-                    if ui.button("Working Dir").clicked() {
-                        let widget = SSHCommandWidget::new(self.next_widget_id, "localhost".to_string(), "pwd".to_string());
-                        self.add_widget(WidgetType::SSHCommand(widget));
-                    }
-                    if ui.button("Who Am I").clicked() {
-                        let widget = SSHCommandWidget::new(self.next_widget_id, "localhost".to_string(), "whoami".to_string());
-                        self.add_widget(WidgetType::SSHCommand(widget));
-                    }
-                    if ui.button("Disk Usage").clicked() {
-                        let widget = SSHCommandWidget::new(self.next_widget_id, "localhost".to_string(), "df -h".to_string());
-                        self.add_widget(WidgetType::SSHCommand(widget));
-                    }
-                    if ui.button("Ping Test").clicked() {
-                        let widget = SSHCommandWidget::new(self.next_widget_id, "localhost".to_string(), "ping -c 3 google.com".to_string());
-                        self.add_widget(WidgetType::SSHCommand(widget));
+                    if ui.button("SSH Command").clicked() {
+                        self.add_widget(WidgetType::new_ssh_command(self.next_widget_id));
                     }
                 });
                 
@@ -115,8 +96,7 @@ impl Skop {
                 ui.label("Information:");
                 ui.vertical(|ui| {
                     if ui.button("About").clicked() {
-                        let widget = AboutWidget::new(self.next_widget_id);
-                        self.add_widget(WidgetType::About(widget));
+                        self.add_widget(WidgetType::new_about(self.next_widget_id));
                     }
                 });
                 
@@ -125,124 +105,40 @@ impl Skop {
                 ui.label(format!("Active Widgets: {}", self.widgets.len()));
             });
         
-        // SSH Configuration Dialog
-        let mut create_ssh_widget = false;
-        let mut cancel_ssh_config = false;
-        
-        if self.show_ssh_config {
-            egui::Window::new("SSH Configuration")
-                .open(&mut self.show_ssh_config)
-                .default_size([400.0, 200.0])
-                .show(ctx, |ui| {
-                    ui.label("Configure SSH Command:");
-                    ui.separator();
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Host:");
-                        ui.text_edit_singleline(&mut self.config_hostname);
-                    });
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Command:");
-                        ui.text_edit_singleline(&mut self.config_command);
-                    });
-                    
-                    ui.separator();
-                    
-                    ui.horizontal(|ui| {
-                        if ui.button("Execute Command").clicked() && !self.config_hostname.is_empty() && !self.config_command.is_empty() {
-                            create_ssh_widget = true;
-                        }
-                        
-                        if ui.button("Cancel").clicked() {
-                            cancel_ssh_config = true;
-                        }
-                    });
-                });
-        }
-        
-        // Handle SSH config actions
-        if create_ssh_widget {
-            let widget = SSHCommandWidget::new(self.next_widget_id, self.config_hostname.clone(), self.config_command.clone());
-            self.add_widget(WidgetType::SSHCommand(widget));
-            self.show_ssh_config = false;
-            self.config_hostname = "localhost".to_string();
-            self.config_command.clear();
-        }
-        
-        if cancel_ssh_config {
-            self.show_ssh_config = false;
-        }
         
         // Render all widgets
         let mut widgets_to_remove = vec![];
-        let mut cpu_refresh_requests = vec![];
-        let mut info_refresh_requests = vec![];
-        let mut process_refresh_requests = vec![];
-        let mut network_refresh_requests = vec![];
         
         for (idx, widget) in self.widgets.iter_mut().enumerate() {
-            let should_remove = match widget {
-                WidgetType::SSHCommand(ssh_widget) => {
-                    !ssh_widget.render(ctx, idx)
-                },
-                WidgetType::CPUMonitor(cpu_widget) => {
-                    let (open, refresh_clicked) = cpu_widget.render(ctx, idx);
-                    if refresh_clicked {
-                        cpu_refresh_requests.push(cpu_widget.clone());
-                    }
-                    !open
-                },
-                WidgetType::SystemInfo(info_widget) => {
-                    let (open, refresh_clicked) = info_widget.render(ctx, idx);
-                    if refresh_clicked {
-                        info_refresh_requests.push(info_widget.clone());
-                    }
-                    !open
-                },
-                WidgetType::ProcessMonitor(proc_widget) => {
-                    let (open, refresh_clicked) = proc_widget.render(ctx, idx);
-                    if refresh_clicked {
-                        process_refresh_requests.push(proc_widget.clone());
-                    }
-                    !open
-                },
-                WidgetType::NetworkMonitor(net_widget) => {
-                    let (open, refresh_clicked) = net_widget.render(ctx, idx);
-                    if refresh_clicked {
-                        network_refresh_requests.push(net_widget.clone());
-                    }
-                    !open
-                },
-                WidgetType::About(about_widget) => {
-                    !about_widget.render(ctx, idx)
-                },
-            };
+            let (open, refresh_clicked) = widget.render(ctx, idx);
             
-            if should_remove {
+            if refresh_clicked {
+                widget.refresh();
+            }
+            
+            if !open {
                 widgets_to_remove.push(idx);
             }
         }
         
-        // Handle refresh requests
-        for cpu_widget in cpu_refresh_requests {
-            cpu_widget.execute();
-        }
-        
-        for info_widget in info_refresh_requests {
-            info_widget.execute();
-        }
-        
-        for proc_widget in process_refresh_requests {
-            proc_widget.execute();
-        }
-        
-        for net_widget in network_refresh_requests {
-            net_widget.execute();
-        }
-        
         // Remove closed widgets
         for idx in widgets_to_remove.iter().rev() {
+            let widget = &self.widgets[*idx];
+            
+            // Stop widget activities before removal
+            widget.stop();
+            
+            // Archive widget in database if we have an active investigation
+            if let Some(ref current_investigation) = self.current_investigation {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                if let Err(e) = rt.block_on(async {
+                    let db = current_investigation.open().await?;
+                    db.archive_widget_instance(widget).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                }) {
+                    eprintln!("Failed to archive widget in database: {}", e);
+                }
+            }
+            
             self.widgets.remove(*idx);
         }
         

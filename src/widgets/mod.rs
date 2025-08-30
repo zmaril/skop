@@ -12,7 +12,50 @@ pub use process_monitor::ProcessMonitorWidget;
 pub use network_monitor::NetworkMonitorWidget;
 pub use about::AboutWidget;
 
-#[derive(Clone)]
+use serde::{Serialize, Deserialize};
+use enum_dispatch::enum_dispatch;
+use eframe::egui;
+
+#[enum_dispatch]
+pub trait Widget {
+    fn widget_type_name(&self) -> &'static str;
+    fn widget_id(&self) -> usize;
+    fn start(&self) {} // Default no-op implementation  
+    fn stop(&self) {} // Default no-op implementation
+    fn render(&mut self, ctx: &egui::Context, idx: usize) -> (bool, bool);
+    fn refresh(&self) { self.stop(); self.start(); }
+}
+
+// Self-contained widget creation functions - each widget handles its own configuration
+impl WidgetType {
+    pub fn new_ssh_command(id: usize) -> Self {
+        WidgetType::SSHCommand(SSHCommandWidget::new_with_config(id))
+    }
+    
+    pub fn new_cpu_monitor(id: usize) -> Self {
+        WidgetType::CPUMonitor(CPUMonitorWidget::new(id))
+    }
+    
+    pub fn new_system_info(id: usize) -> Self {
+        WidgetType::SystemInfo(SystemInfoWidget::new_with_config(id))
+    }
+    
+    pub fn new_process_monitor(id: usize) -> Self {
+        WidgetType::ProcessMonitor(ProcessMonitorWidget::new(id))
+    }
+    
+    pub fn new_network_monitor(id: usize) -> Self {
+        WidgetType::NetworkMonitor(NetworkMonitorWidget::new(id))
+    }
+    
+    pub fn new_about(id: usize) -> Self {
+        WidgetType::About(AboutWidget::new(id))
+    }
+}
+
+#[enum_dispatch(Widget)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum WidgetType {
     SSHCommand(SSHCommandWidget),
     CPUMonitor(CPUMonitorWidget),
@@ -22,15 +65,3 @@ pub enum WidgetType {
     About(AboutWidget),
 }
 
-impl WidgetType {
-    pub fn execute(&self) {
-        match self {
-            WidgetType::SSHCommand(w) => w.execute(),
-            WidgetType::CPUMonitor(w) => w.execute(),
-            WidgetType::SystemInfo(w) => w.execute(),
-            WidgetType::ProcessMonitor(w) => w.execute(),
-            WidgetType::NetworkMonitor(w) => w.execute(),
-            WidgetType::About(w) => w.execute(),
-        }
-    }
-}
