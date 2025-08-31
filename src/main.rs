@@ -63,6 +63,9 @@ pub struct Skop {
     pub widgets: Vec<WidgetType>,
     pub next_widget_id: usize,
     
+    // Host management
+    pub hosts: Vec<crate::database::investigation_db::Host>,
+    
 }
 
 impl Skop {
@@ -89,6 +92,8 @@ impl Skop {
             
             widgets: vec![],
             next_widget_id: 0,
+            
+            hosts: vec![],
         }
     }
     
@@ -117,6 +122,9 @@ impl Skop {
             }
         }
         
+        // Set available hosts for command widgets
+        widget.set_available_hosts(self.hosts.clone());
+        
         widget.start(); // Auto-start after widget is saved and database is set
         
         self.widgets.push(widget);
@@ -128,11 +136,33 @@ impl Skop {
         let loaded_widgets = db.load_widget_instances().await?;
         let db_arc = std::sync::Arc::new(db);
         
+        // Load hosts
+        match db_arc.list_hosts().await {
+            Ok(hosts) => {
+                self.hosts = hosts;
+                println!("Loaded {} hosts for investigation", self.hosts.len());
+            }
+            Err(e) => {
+                eprintln!("Failed to load hosts: {}", e);
+                // Set default localhost if loading fails
+                self.hosts = vec![database::investigation_db::Host {
+                    id: Some(1),
+                    name: "localhost".to_string(),
+                    ssh_alias: "localhost".to_string(),
+                    description: "Local machine".to_string(),
+                    is_localhost: true,
+                }];
+            }
+        }
+        
         for mut widget in loaded_widgets {
             let widget_id = widget.widget_id();
             
             // Set database connection for data capture
             widget.set_database(Some(db_arc.clone()));
+            
+            // Set available hosts for command widgets
+            widget.set_available_hosts(self.hosts.clone());
             
             // Restore historical output for command widgets
             if let Err(e) = self.restore_widget_output(&mut widget, &db_arc).await {

@@ -1,65 +1,46 @@
 Goal:
-Make something good and usable 
+Make something good and usable
 
 Now:
-Keep plugging along 
---
-Store all the lines 
-Replay the lines 
-Make it make more and better noises 
-- port based, Network
-- filesystem 
+Keep plugging along
 
-Make host be a primary part of it 
+---
+Make a way of filtering and seeing the raw data. 
+Window full screen mode 
 
-Pivot tables 
-Graphs 
+Sonification
+- Make it make more and better noises
+- Port-based (network)
+- Filesystem
 
-Save widget layout to json? 
+Networking and hosts
+- Make a set of globally configured hosts maybe? 
+- SSH bastion that people can ssh into and run cmmands through the server 
+- Add ping back
 
+Persistence and layout
 
-Escape out of things 
-Copy and paste out of it 
-Pivot tables
+UI/UX
+- Pause everything button
+- Escape out of things
+- Copy and paste out
 
-Spreadsheet 
-Logs 
-Canvas/Lighttable 
-Pivot tables 
+Analysis and visualization
+- Pivot tables
+- Graphs
+- Spreadsheet
+- Logs
 
-CPU sounds keep going after cpu thing is gone. 
+Monitoring and bugs
+- For refreshed commands, check if data arrives in batches vs all together
 
-https://github.com/neferdata/allms llm's for some reason? 
+Ideas
+- LLMs? https://github.com/neferdata/allms
 
-ssh bastion 
+Chores
+- Fix Rust
 
-Command (build ssh into everything)
-
-WidgetType feels repitive.
-
-Save widget config after each interaction? 
-
-Make collapse saving work. Just not working right now, because th estate isn't part of the widget config, it's part of egui directly. 
-
-
-Persistence is better but eh. 
-
-Make it possible to edit color and name. 
-Add overview of things to investigation list. 
-
-Pause everything button. 
-
-Can widget_type in mod be typechecked? 
-Remove num_cpus? 
-
-Add the ping stuff back in 
-
-Make hosts be configurable, connections, unsure. Let's say hosts for now and have them be configured per investiatoin and then selectable per widget via dropdown,. 
-
-
-CLick events on investigation row sucks
-
-ps output might be parsed working
-for refreshed commands, check if the data is comiing in all together or in batches 
-
-Fix rust 
+Deferred
+- Infinite canvas mode 
+- Fix click events on investigation row
+- Persist collapsed state (currently in egui; move into widget config)

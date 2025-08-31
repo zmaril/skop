@@ -32,9 +32,13 @@ pub trait Widget {
     fn needs_restart(&self) -> bool { false }
     
     // Restore historical data to widget - default no-op for widgets without data
-    fn restore_widget_data(&mut self, _data: Vec<String>) {}
+    fn restore_widget_data(&mut self, _data: Vec<String>); 
+    
+    // Set available hosts for command widgets - default no-op
+    fn set_available_hosts(&mut self, _hosts: Vec<crate::database::investigation_db::Host>); 
 }
 
+// TODO: Figure out how to not repeat this. 
 // Self-contained widget creation functions - each widget handles its own configuration
 impl WidgetType {
     pub fn new_raw_command(id: usize) -> Self {

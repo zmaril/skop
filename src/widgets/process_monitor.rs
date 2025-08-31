@@ -138,6 +138,10 @@ impl crate::widgets::Widget for ProcessMonitorWidget {
     fn restore_widget_data(&mut self, data: Vec<String>) {
         self.executor.load_historical_output(data);
     }
+    
+    fn set_available_hosts(&mut self, hosts: Vec<crate::database::investigation_db::Host>) {
+        self.executor.set_available_hosts(hosts);
+    }
 }
 
 impl CommandWidget for ProcessMonitorWidget {

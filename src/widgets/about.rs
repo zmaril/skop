@@ -28,6 +28,14 @@ impl crate::widgets::Widget for AboutWidget {
         // About widget doesn't capture data
     }
     
+    fn restore_widget_data(&mut self, _data: Vec<String>) {
+        // About widget doesn't have data to restore
+    }
+    
+    fn set_available_hosts(&mut self, _hosts: Vec<crate::database::investigation_db::Host>) {
+        // About widget doesn't use hosts
+    }
+    
     fn needs_restart(&self) -> bool {
         // About widget doesn't execute commands, never needs restart
         false

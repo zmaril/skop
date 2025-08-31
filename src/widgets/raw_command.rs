@@ -50,6 +50,10 @@ impl crate::widgets::Widget for RawCommandWidget {
         }
     }
     
+    fn set_available_hosts(&mut self, hosts: Vec<crate::database::investigation_db::Host>) {
+        self.executor.set_available_hosts(hosts);
+    }
+    
     fn config_changed(&self) -> bool {
         self.config_unsaved
     }

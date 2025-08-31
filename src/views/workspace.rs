@@ -2,6 +2,7 @@ use eframe::egui;
 use crate::{AppMode, Skop};
 use crate::widgets::{WidgetType, Widget};
 use crate::investigation::{Investigation, COLORS, find_color_name};
+use crate::database::investigation_db::Host;
 
 impl Skop {
     pub fn render_investigation_workspace(&mut self, ctx: &egui::Context) {
@@ -186,6 +187,114 @@ impl Skop {
                     
                     ui.separator();
                 }
+                
+                // Host management section
+                ui.collapsing("Host Configuration", |ui| {
+                    ui.label(format!("Configured Hosts: {}", self.hosts.len()));
+                    
+                    // List existing hosts
+                    egui::ScrollArea::vertical()
+                        .max_height(100.0)
+                        .show(ui, |ui| {
+                            for host in &self.hosts {
+                                ui.horizontal(|ui| {
+                                    if host.is_localhost {
+                                        ui.label("🏠");
+                                    } else {
+                                        ui.label("🖥️");
+                                    }
+                                    ui.label(&host.name);
+                                    if !host.is_localhost {
+                                        ui.label(format!("({})", host.ssh_alias));
+                                    }
+                                });
+                            }
+                        });
+                    
+                    ui.separator();
+                    
+                    // Add new host section
+                    ui.collapsing("Add New Host", |ui| {
+                        let mut new_host_name = ui.ctx().data_mut(|d| 
+                            d.get_temp::<String>(egui::Id::new("new_host_name"))
+                        ).unwrap_or_default();
+                        let mut new_ssh_alias = ui.ctx().data_mut(|d| 
+                            d.get_temp::<String>(egui::Id::new("new_ssh_alias"))
+                        ).unwrap_or_default();
+                        let mut new_host_description = ui.ctx().data_mut(|d| 
+                            d.get_temp::<String>(egui::Id::new("new_host_description"))
+                        ).unwrap_or_default();
+                        
+                        ui.label("Display Name:");
+                        if ui.text_edit_singleline(&mut new_host_name).changed() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("new_host_name"), new_host_name.clone()));
+                        }
+                        
+                        ui.label("SSH Alias:");
+                        ui.small("Examples: 'myserver', 'user@hostname', 'user@192.168.1.100'");
+                        if ui.text_edit_singleline(&mut new_ssh_alias).changed() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("new_ssh_alias"), new_ssh_alias.clone()));
+                        }
+                        
+                        ui.label("Description:");
+                        if ui.text_edit_multiline(&mut new_host_description).changed() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("new_host_description"), new_host_description.clone()));
+                        }
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Add Host").clicked() {
+                                if !new_host_name.trim().is_empty() && !new_ssh_alias.trim().is_empty() {
+                                    // Add host to database
+                                    if let Some(ref current_investigation) = self.current_investigation {
+                                        let rt = tokio::runtime::Runtime::new().unwrap();
+                                        match rt.block_on(async {
+                                            let db = current_investigation.open().await?;
+                                            db.add_host(&new_host_name, &new_ssh_alias, &new_host_description).await
+                                        }) {
+                                            Ok(host_id) => {
+                                                println!("Added host '{}' with ID {}", new_host_name, host_id);
+                                                
+                                                // Add to local list
+                                                self.hosts.push(Host {
+                                                    id: Some(host_id),
+                                                    name: new_host_name.clone(),
+                                                    ssh_alias: new_ssh_alias.clone(),
+                                                    description: new_host_description.clone(),
+                                                    is_localhost: new_ssh_alias == "localhost" || new_ssh_alias == "127.0.0.1",
+                                                });
+                                                
+                                                // Update all existing widgets with the new host list
+                                                for widget in &mut self.widgets {
+                                                    widget.set_available_hosts(self.hosts.clone());
+                                                }
+                                                
+                                                // Clear form
+                                                ui.ctx().data_mut(|d| {
+                                                    d.remove::<String>(egui::Id::new("new_host_name"));
+                                                    d.remove::<String>(egui::Id::new("new_ssh_alias"));
+                                                    d.remove::<String>(egui::Id::new("new_host_description"));
+                                                });
+                                            }
+                                            Err(e) => {
+                                                eprintln!("ERROR: Failed to add host: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if ui.button("Clear").clicked() {
+                                ui.ctx().data_mut(|d| {
+                                    d.remove::<String>(egui::Id::new("new_host_name"));
+                                    d.remove::<String>(egui::Id::new("new_ssh_alias"));
+                                    d.remove::<String>(egui::Id::new("new_host_description"));
+                                });
+                            }
+                        });
+                    });
+                });
+                
+                ui.separator();
                 
                 ui.label("System Monitoring:");
                 ui.vertical(|ui| {

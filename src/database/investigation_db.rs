@@ -1,6 +1,16 @@
 use sqlx::{SqlitePool, Row, sqlite::SqliteConnectOptions};
 use std::path::PathBuf;
 use crate::widgets::Widget;
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Host {
+    pub id: Option<i64>,
+    pub name: String,        // Display name like "Production Server"
+    pub ssh_alias: String,   // SSH alias like "prod-server" or "user@hostname"
+    pub description: String,
+    pub is_localhost: bool,
+}
 
 #[derive(Clone)]
 pub struct InvestigationDB {
@@ -285,5 +295,126 @@ impl InvestigationDB {
         }
         
         Ok(lines)
+    }
+    
+    pub async fn get_widget_summary(&self) -> Result<(usize, std::collections::HashMap<String, usize>), sqlx::Error> {
+        let rows = sqlx::query("SELECT widget_type, COUNT(*) as count FROM widgets WHERE archived_at IS NULL GROUP BY widget_type")
+            .fetch_all(&self.pool).await?;
+        
+        let mut total_count = 0;
+        let mut type_counts = std::collections::HashMap::new();
+        
+        for row in rows {
+            let widget_type = row.get::<String, _>("widget_type");
+            let count = row.get::<i64, _>("count") as usize;
+            total_count += count;
+            type_counts.insert(widget_type, count);
+        }
+        
+        Ok((total_count, type_counts))
+    }
+    
+    // Host management methods
+    pub async fn add_host(&self, name: &str, ssh_alias: &str, description: &str) -> Result<i64, sqlx::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as i64;
+        
+        let is_localhost = ssh_alias == "localhost" || ssh_alias == "127.0.0.1";
+        
+        let result = sqlx::query(
+            "INSERT INTO hosts (name, ssh_alias, description, created_at, is_localhost) VALUES (?, ?, ?, ?, ?)"
+        )
+        .bind(name)
+        .bind(ssh_alias)
+        .bind(description)
+        .bind(now)
+        .bind(is_localhost)
+        .execute(&self.pool).await?;
+        
+        Ok(result.last_insert_rowid())
+    }
+    
+    pub async fn list_hosts(&self) -> Result<Vec<Host>, sqlx::Error> {
+        let rows = sqlx::query("SELECT id, name, ssh_alias, description, is_localhost FROM hosts ORDER BY is_localhost DESC, name ASC")
+            .fetch_all(&self.pool).await?;
+        
+        let mut hosts = Vec::new();
+        for row in rows {
+            hosts.push(Host {
+                id: Some(row.get::<i64, _>("id")),
+                name: row.get::<String, _>("name"),
+                ssh_alias: row.get::<String, _>("ssh_alias"),
+                description: row.get::<String, _>("description"),
+                is_localhost: row.get::<bool, _>("is_localhost"),
+            });
+        }
+        
+        Ok(hosts)
+    }
+    
+    pub async fn update_host(&self, id: i64, name: &str, ssh_alias: &str, description: &str) -> Result<(), sqlx::Error> {
+        let is_localhost = ssh_alias == "localhost" || ssh_alias == "127.0.0.1";
+        
+        let result = sqlx::query(
+            "UPDATE hosts SET name = ?, ssh_alias = ?, description = ?, is_localhost = ? WHERE id = ?"
+        )
+        .bind(name)
+        .bind(ssh_alias)
+        .bind(description)
+        .bind(is_localhost)
+        .bind(id)
+        .execute(&self.pool).await?;
+        
+        if result.rows_affected() == 0 {
+            eprintln!("WARNING: No host found with ID {} to update", id);
+        } else {
+            println!("Successfully updated host ID {}", id);
+        }
+        
+        Ok(())
+    }
+    
+    pub async fn delete_host(&self, id: i64) -> Result<(), sqlx::Error> {
+        // Don't allow deleting localhost
+        let row = sqlx::query("SELECT is_localhost FROM hosts WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool).await?;
+            
+        if let Some(row) = row {
+            if row.get::<bool, _>("is_localhost") {
+                return Err(sqlx::Error::Protocol("Cannot delete localhost host".into()));
+            }
+        }
+        
+        let result = sqlx::query("DELETE FROM hosts WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool).await?;
+        
+        if result.rows_affected() == 0 {
+            eprintln!("WARNING: No host found with ID {} to delete", id);
+        } else {
+            println!("Successfully deleted host ID {}", id);
+        }
+        
+        Ok(())
+    }
+    
+    pub async fn get_host_by_name(&self, name: &str) -> Result<Option<Host>, sqlx::Error> {
+        let row = sqlx::query("SELECT id, name, ssh_alias, description, is_localhost FROM hosts WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool).await?;
+        
+        match row {
+            Some(row) => Ok(Some(Host {
+                id: Some(row.get::<i64, _>("id")),
+                name: row.get::<String, _>("name"),
+                ssh_alias: row.get::<String, _>("ssh_alias"),
+                description: row.get::<String, _>("description"),
+                is_localhost: row.get::<bool, _>("is_localhost"),
+            })),
+            None => Ok(None)
+        }
     }
 }

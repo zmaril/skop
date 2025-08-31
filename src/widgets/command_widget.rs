@@ -40,7 +40,7 @@ impl CommandSpec {
 }
 
 // Core command executor that all widgets will use  
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CommandExecutor {
     pub output: Arc<Mutex<Vec<String>>>,
     pub is_running: Arc<Mutex<bool>>,
@@ -48,10 +48,12 @@ pub struct CommandExecutor {
     pub widget_id: Option<i32>,
     pub widget_version: Option<i32>,
     pub max_lines: usize,  // Limit output buffer size
+    pub selected_host: Arc<Mutex<String>>,  // Selected host for execution
+    pub available_hosts: Arc<Mutex<Vec<crate::database::investigation_db::Host>>>,  // Available hosts
 }
 
-impl CommandExecutor {
-    pub fn new() -> Self {
+impl Default for CommandExecutor {
+    fn default() -> Self {
         Self {
             output: Arc::new(Mutex::new(Vec::new())),
             is_running: Arc::new(Mutex::new(false)),
@@ -59,7 +61,31 @@ impl CommandExecutor {
             widget_id: None,
             widget_version: None,
             max_lines: 1000,
+            selected_host: Arc::new(Mutex::new("localhost".to_string())),
+            available_hosts: Arc::new(Mutex::new(vec![])),
         }
+    }
+}
+
+impl CommandExecutor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    pub fn get_selected_host(&self) -> String {
+        self.selected_host.lock().unwrap().clone()
+    }
+    
+    pub fn set_selected_host(&self, host: String) {
+        *self.selected_host.lock().unwrap() = host;
+    }
+    
+    pub fn set_available_hosts(&self, hosts: Vec<crate::database::investigation_db::Host>) {
+        *self.available_hosts.lock().unwrap() = hosts;
+    }
+    
+    pub fn get_available_hosts(&self) -> Vec<crate::database::investigation_db::Host> {
+        self.available_hosts.lock().unwrap().clone()
     }
     
     pub fn with_max_lines(mut self, max: usize) -> Self {
@@ -244,9 +270,29 @@ pub trait CommandWidget: crate::widgets::Widget {
         ExecutionMode::OneShot
     }
     
+    // Get selected host from executor
+    fn selected_host(&self) -> String {
+        self.executor().get_selected_host()
+    }
+    
+    // Set selected host in executor
+    fn set_selected_host(&mut self, host: String) {
+        self.executor().set_selected_host(host);
+    }
+    
     // Provided: standard start implementation
     fn start_command(&self) {
-        let spec = self.build_command();
+        let mut spec = self.build_command();
+        
+        // Wrap with SSH if not localhost
+        let host = self.selected_host();
+        if host != "localhost" && host != "127.0.0.1" && !host.is_empty() {
+            // Convert local command to SSH command
+            let original_command = format!("{} {}", spec.program, spec.args.join(" "));
+            spec = CommandSpec::new("ssh")
+                .arg(&host)
+                .arg(original_command);
+        }
         
         match self.execution_mode() {
             ExecutionMode::OneShot => {
@@ -334,6 +380,8 @@ pub trait CommandOutputRenderer {
 
 pub trait CommandControlBar: CommandWidget {
     fn render_controls(&mut self, ui: &mut eframe::egui::Ui) -> bool {
+        use eframe::egui;
+        
         let mut refresh_clicked = false;
         let is_running = self.executor().is_running();
         
@@ -353,6 +401,52 @@ pub trait CommandControlBar: CommandWidget {
         
         if ui.button("Clear").clicked() {
             self.executor().clear_output();
+        }
+        
+        ui.separator();
+        
+        // Host selection
+        ui.label("Host:");
+        let current_host = self.selected_host();
+        let mut selected_host = current_host.clone();
+        
+        // Get hosts from executor and ensure localhost is always available
+        let mut available_hosts = self.executor().get_available_hosts();
+        
+        // Always ensure localhost is available
+        let has_localhost = available_hosts.iter().any(|h| h.is_localhost);
+        if !has_localhost {
+            available_hosts.insert(0, crate::database::investigation_db::Host {
+                id: Some(1),
+                name: "localhost".to_string(),
+                ssh_alias: "localhost".to_string(),
+                description: "Local machine".to_string(),
+                is_localhost: true,
+            });
+        }
+        
+        egui::ComboBox::from_id_salt(format!("host_selector_{}", self.widget_id()))
+            .selected_text(&selected_host)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for host in &available_hosts {
+                    let label = if host.is_localhost {
+                        format!("🏠 {}", host.name)
+                    } else {
+                        format!("🖥️ {}", host.name)
+                    };
+                    ui.selectable_value(&mut selected_host, host.ssh_alias.clone(), label);
+                }
+            });
+        
+        if selected_host != current_host {
+            self.set_selected_host(selected_host);
+            // Restart if running with new host
+            if is_running {
+                self.stop_command();
+                self.start_command();
+                refresh_clicked = true;
+            }
         }
         
         refresh_clicked

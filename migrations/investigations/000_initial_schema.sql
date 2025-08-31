@@ -33,9 +33,24 @@ CREATE TABLE raw_data (
     FOREIGN KEY(widget_id) REFERENCES widgets(id)
 );
 
+-- Hosts configuration table
+CREATE TABLE hosts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    ssh_alias TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL,
+    is_localhost BOOLEAN DEFAULT 0
+);
+
+-- Add default localhost entry
+INSERT INTO hosts (name, ssh_alias, description, created_at, is_localhost) 
+VALUES ('localhost', 'localhost', 'Local machine', 0, 1);
+
 -- Indexes for performance
 CREATE INDEX idx_raw_data_widget_id ON raw_data(widget_id);
 CREATE INDEX idx_raw_data_widget_version ON raw_data(widget_id, widget_version);
 CREATE INDEX idx_raw_data_timestamp ON raw_data(timestamp);
 CREATE INDEX idx_widgets_archived_at ON widgets(archived_at);
 CREATE INDEX idx_widgets_latest_version ON widgets(id, version DESC);
+CREATE INDEX idx_hosts_name ON hosts(name);

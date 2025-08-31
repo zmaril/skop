@@ -79,9 +79,6 @@ impl Skop {
             .default_width(400.0)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading("Investigations");
-                ui.separator();
-                
                 if self.investigations.is_empty() {
                     ui.add_space(20.0);
                     ui.label("No investigations yet");
@@ -93,19 +90,40 @@ impl Skop {
                                 egui::Sense::click()
                             );
                             
-                            // Color row based on investigation color with hover effect
+                            // Color row based on investigation color with dark mode support
+                            let is_dark = ui.style().visuals.dark_mode;
                             let bg_color = if response.hovered() {
-                                egui::Color32::from_rgb(
-                                    ((investigation.color[0] * 0.4 + 0.6) * 255.0) as u8,
-                                    ((investigation.color[1] * 0.4 + 0.6) * 255.0) as u8,
-                                    ((investigation.color[2] * 0.4 + 0.6) * 255.0) as u8,
-                                )
+                                if is_dark {
+                                    // Dark mode: use investigation color as accent on dark background
+                                    egui::Color32::from_rgb(
+                                        ((investigation.color[0] * 0.3 + 0.1) * 255.0) as u8,
+                                        ((investigation.color[1] * 0.3 + 0.1) * 255.0) as u8,
+                                        ((investigation.color[2] * 0.3 + 0.1) * 255.0) as u8,
+                                    )
+                                } else {
+                                    // Light mode: lighter version of investigation color
+                                    egui::Color32::from_rgb(
+                                        ((investigation.color[0] * 0.4 + 0.6) * 255.0) as u8,
+                                        ((investigation.color[1] * 0.4 + 0.6) * 255.0) as u8,
+                                        ((investigation.color[2] * 0.4 + 0.6) * 255.0) as u8,
+                                    )
+                                }
                             } else {
-                                egui::Color32::from_rgb(
-                                    ((investigation.color[0] * 0.2 + 0.8) * 255.0) as u8,
-                                    ((investigation.color[1] * 0.2 + 0.8) * 255.0) as u8,
-                                    ((investigation.color[2] * 0.2 + 0.8) * 255.0) as u8,
-                                )
+                                if is_dark {
+                                    // Dark mode: subtle tint of investigation color on darker background
+                                    egui::Color32::from_rgb(
+                                        ((investigation.color[0] * 0.2 + 0.05) * 255.0) as u8,
+                                        ((investigation.color[1] * 0.2 + 0.05) * 255.0) as u8,
+                                        ((investigation.color[2] * 0.2 + 0.05) * 255.0) as u8,
+                                    )
+                                } else {
+                                    // Light mode: very light version of investigation color
+                                    egui::Color32::from_rgb(
+                                        ((investigation.color[0] * 0.2 + 0.8) * 255.0) as u8,
+                                        ((investigation.color[1] * 0.2 + 0.8) * 255.0) as u8,
+                                        ((investigation.color[2] * 0.2 + 0.8) * 255.0) as u8,
+                                    )
+                                }
                             };
                             
                             ui.painter().rect_filled(response.rect, 4.0, bg_color);
@@ -129,11 +147,42 @@ impl Skop {
                                             }
                                         });
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(2.0);
+                                    let secondary_text_color = if ui.style().visuals.dark_mode {
+                                        egui::Color32::from_rgb(180, 180, 180) // Lighter gray for dark mode
+                                    } else {
+                                        ui.style().visuals.weak_text_color() // Keep original for light mode
+                                    };
                                     ui.label(egui::RichText::new(format!("Last accessed: {}", 
                                         Investigation::format_timestamp(investigation.last_accessed)))
                                         .size(11.0)
-                                        .color(ui.style().visuals.weak_text_color()));
+                                        .color(secondary_text_color));
+                                    
+                                    // Widget summary
+                                    let rt = tokio::runtime::Runtime::new().unwrap();
+                                    match rt.block_on(async {
+                                        let db = investigation.open().await?;
+                                        db.get_widget_summary().await
+                                    }) {
+                                        Ok((total_count, type_counts)) => {
+                                            if total_count > 0 {
+                                                ui.add_space(2.0);
+                                                let mut widget_summary = format!("{} widgets", total_count);
+                                                if !type_counts.is_empty() {
+                                                    let types: Vec<String> = type_counts.iter()
+                                                        .map(|(t, c)| if *c > 1 { format!("{}({})", t, c) } else { t.clone() })
+                                                        .collect();
+                                                    widget_summary.push_str(&format!(" • {}", types.join(", ")));
+                                                }
+                                                ui.label(egui::RichText::new(widget_summary)
+                                                    .size(10.0)
+                                                    .color(secondary_text_color));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to get widget summary for investigation '{}': {}", investigation.name, e);
+                                        }
+                                    }
                                 });
                             });
                             
